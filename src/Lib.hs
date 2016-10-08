@@ -38,5 +38,7 @@ getUsers conduit = do
 getTracTickets :: IO ([TracTicket])
 getTracTickets = do
     conn <- connect defaultConnectInfo {connectDatabase = "ghc_trac"}
-    results <- query_ conn "SELECT * FROM ticket JOIN ticket_custom ON ticket_custom.ticket = ticket.id;"
-    return results
+    rawTickets <- query_ conn "SELECT * FROM ticket"
+    customFields <- query_ conn "SELECT * FROM ticket_custom"
+    ticketComments <- query_ conn "SELECT * FROM ticket_change WHERE field = 'comment'"
+    return $ mergeTracData rawTickets customFields ticketComments
