@@ -33,6 +33,7 @@ library
                      , cryptonite
                      , cryptohash
                      , postgresql-simple
+                     , mysql-simple
   default-language:    Haskell2010
 
 executable trac-to-phabricator-exe
