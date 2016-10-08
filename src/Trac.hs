@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Trac where
 
@@ -8,6 +9,7 @@ import Control.Monad (liftM, liftM2)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock (picosecondsToDiffTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.FromRow
 
 data TracTicket = TracTicket
@@ -125,3 +127,12 @@ mergeTicketsAndComments tickets comments = fmap merge tickets
     where
         merge ticket = ticket {t_comments = (ticketComments ticket)}
         ticketComments ticket = filter (\x -> t_id ticket == co_ticket x) comments
+
+
+getTracTickets :: IO ([TracTicket])
+getTracTickets = do
+    conn <- connect defaultConnectInfo {connectDatabase = "ghc_trac"}
+    rawTickets <- query_ conn "SELECT * FROM ticket"
+    customFields <- query_ conn "SELECT * FROM ticket_custom"
+    ticketComments <- query_ conn "SELECT * FROM ticket_change WHERE field = 'comment'"
+    return $ mergeTracData rawTickets customFields ticketComments

@@ -1,13 +1,14 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Phabricator where
 
 import GHC.Generics
+import Data.Monoid ((<>))
 import Data.Aeson.TH
 import Data.Text (Text)
-
-import Network.Conduit.Client (Url, PHID, User)
+import Network.Conduit.Client
 
 data ManiphestAPITicket = ManiphestAPITicket
     { m_title :: String
@@ -34,3 +35,11 @@ data PhabricatorUser = PhabricatorUser
     } deriving (Show,Generic)
 
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 2} ''PhabricatorUser)
+
+
+getUsers :: Conduit -> IO (Either Text [PhabricatorUser])
+getUsers conduit = do
+    response <- callConduitPairs conduit "user.query" []
+    return $ case response of
+        ConduitResult users -> Right users
+        ConduitError code info -> Left (code <> info)
