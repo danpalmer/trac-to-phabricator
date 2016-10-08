@@ -135,4 +135,5 @@ getTracTickets = do
     rawTickets <- query_ conn "SELECT * FROM ticket"
     customFields <- query_ conn "SELECT * FROM ticket_custom"
     ticketComments <- query_ conn "SELECT * FROM ticket_change WHERE field = 'comment'"
+    close conn
     return $ mergeTracData rawTickets customFields ticketComments
