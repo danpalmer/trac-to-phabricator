@@ -23,8 +23,8 @@ migrate = do
     let authToken = ConduitAPITokenAuth "api-gptwkv5kg4nayou7gl5zasm3u5hu"
     let conduit = Conduit "http://phabricator.dev/api" authToken
     users <- getUsers conduit
-    getTracTickets
-    putStrLn $ show users
+    tickets <- getTracTickets
+    putStrLn $ "Found " ++ (show $ length tickets) ++ " tickets."
 
 
 getUsers :: Conduit -> IO (Either Text [PhabricatorUser])
