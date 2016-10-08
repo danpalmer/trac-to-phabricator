@@ -3,6 +3,8 @@ extra-package-dbs: []
 packages:
 - '.'
 extra-deps:
-- mysql-0.1.1.8
-- mysql-simple-0.2.2.5
+- binary-0.8.4.1
+- mysql-haskell-0.5.0.0
+- wire-streams-0.0.2.0
+- word24-1.0.7
 resolver: lts-7.2
