@@ -7,6 +7,7 @@ module Lib
     ( migrate
     ) where
 
+import Data.Monoid ((<>))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Either
@@ -24,6 +25,7 @@ migrate = do
     let conduit = Conduit "http://phabricator.dev/api" authToken
     users <- getUsers conduit
     tickets <- getTracTickets
+    mapM (putStr . describeTicket) tickets
     putStrLn $ "Found " ++ (show $ length tickets) ++ " tickets."
 
 
@@ -42,3 +44,14 @@ getTracTickets = do
     customFields <- query_ conn "SELECT * FROM ticket_custom"
     ticketComments <- query_ conn "SELECT * FROM ticket_change WHERE field = 'comment'"
     return $ mergeTracData rawTickets customFields ticketComments
+
+
+describeTicket :: TracTicket -> String
+describeTicket ticket = T.unpack $
+    T.concat [
+        (t_summary ticket),
+            "\n\tFields: ", (textLength $ t_customFields ticket),
+            "\n\tComments:", (textLength $ t_comments ticket),
+            "\n\n"
+    ]
+    where textLength = T.pack . show . length
