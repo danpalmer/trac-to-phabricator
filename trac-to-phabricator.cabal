@@ -16,7 +16,23 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lib
+  other-modules:       Network.Conduit.Client
+                     , Network.Http.Client.Extras
+                     , Phabricator
+                     , Trac
   build-depends:       base >= 4.7 && < 5
+                     , time
+                     , network-uri
+                     , text
+                     , bytestring
+                     , http-client
+                     , http-streams
+                     , io-streams
+                     , aeson
+                     , base16-bytestring
+                     , cryptonite
+                     , cryptohash
+                     , postgresql-simple
   default-language:    Haskell2010
 
 executable trac-to-phabricator-exe
