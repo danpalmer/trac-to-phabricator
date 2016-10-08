@@ -28,8 +28,8 @@ data TracTicket = TracTicket
     , t_summary :: Text
     , t_description :: Maybe Text
     , t_keywords :: Maybe Text
-    , customFields :: [TracCustomField]
-    , comments :: [TracTicketComment]
+    , t_customFields :: [TracCustomField]
+    , t_comments :: [TracTicketComment]
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -117,11 +117,11 @@ mergeTracData tickets fields comments = mergeTicketsAndComments (mergeTicketsAnd
 mergeTicketsAndCustomFields :: [TracTicket] -> [TracCustomFieldRelation] -> [TracTicket]
 mergeTicketsAndCustomFields tickets customFields = fmap merge tickets
     where
-        merge ticket = ticket {customFields = cfr_customField <$> (fields ticket)}
+        merge ticket = ticket {t_customFields = cfr_customField <$> (fields ticket)}
         fields ticket = filter (\x -> t_id ticket == cfr_ticket x) customFields
 
 mergeTicketsAndComments :: [TracTicket] -> [TracTicketComment] -> [TracTicket]
 mergeTicketsAndComments tickets comments = fmap merge tickets
     where
-        merge ticket = ticket {comments = (ticketComments ticket)}
+        merge ticket = ticket {t_comments = (ticketComments ticket)}
         ticketComments ticket = filter (\x -> t_id ticket == co_ticket x) comments
