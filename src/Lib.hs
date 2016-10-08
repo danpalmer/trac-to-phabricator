@@ -17,11 +17,8 @@ import Phabricator
 
 migrate :: IO ()
 migrate = do
-    let authToken = ConduitAPITokenAuth "api-gptwkv5kg4nayou7gl5zasm3u5hu"
-    let conduit = Conduit "http://phabricator.dev/api" authToken
-    users <- getUsers conduit
+    users <- getPhabricatorUsers
     tickets <- getTracTickets
-    mapM (putStr . describeTicket) tickets
     putStrLn $ "Found " ++ (show $ length tickets) ++ " tickets."
 
 
