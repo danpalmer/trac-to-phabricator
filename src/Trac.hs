@@ -6,17 +6,15 @@ module Trac where
 import GHC.Generics
 import Data.Text (Text)
 import Control.Monad (liftM, liftM2)
-import Data.Time.Clock (UTCTime)
-import Data.Time.Clock (picosecondsToDiffTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Time.Clock (DiffTime, picosecondsToDiffTime)
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.FromRow
 
 data TracTicket = TracTicket
     { t_id :: Int
     , t_type :: Text
-    , t_time :: UTCTime
-    , t_changetime :: UTCTime
+    , t_time :: DiffTime
+    , t_changetime :: DiffTime
     , t_component :: Text
     , t_severity :: Maybe Text
     , t_priority :: Text
@@ -38,8 +36,8 @@ instance FromRow TracTicket where
     fromRow = TracTicket
         <$> field
         <*> field
-        <*> (liftM tracTimeToUTCTime field)
-        <*> (liftM tracTimeToUTCTime field)
+        <*> (liftM tracTimeToDiffTime field)
+        <*> (liftM tracTimeToDiffTime field)
         <*> field
         <*> field
         <*> field
@@ -73,7 +71,7 @@ instance FromRow TracCustomFieldRelation where
 
 data TracTicketChange = TracTicketChange
     { ch_ticket :: Int
-    , ch_time :: UTCTime
+    , ch_time :: DiffTime
     , ch_author :: Text
     , ch_field :: Text
     , ch_oldvalue :: Text
@@ -83,16 +81,15 @@ data TracTicketChange = TracTicketChange
 instance FromRow TracTicketChange where
     fromRow = TracTicketChange
         <$> field
-        <*> (liftM tracTimeToUTCTime field)
+        <*> (liftM tracTimeToDiffTime field)
         <*> field
         <*> field
         <*> field
         <*> field
-
 
 data TracTicketComment = TracTicketComment
     { co_ticket :: Int
-    , co_time :: UTCTime
+    , co_time :: DiffTime
     , co_author :: Text
     , co_comment :: Text
     } deriving (Generic, Show)
@@ -100,16 +97,15 @@ data TracTicketComment = TracTicketComment
 instance FromRow TracTicketComment where
     fromRow = TracTicketComment
         <$> field
-        <*> (liftM tracTimeToUTCTime field)
+        <*> (liftM tracTimeToDiffTime field)
         <*> field
         <*  (field :: RowParser Text)
         <*  (field :: RowParser Text)
         <*> field
 
 
-tracTimeToUTCTime :: Integer -> UTCTime
-tracTimeToUTCTime = posixSecondsToUTCTime . toNominalDiffTime . picosecondsToDiffTime
-    where toNominalDiffTime = fromRational . toRational
+tracTimeToDiffTime :: Integer -> DiffTime
+tracTimeToDiffTime = picosecondsToDiffTime
 
 
 mergeTracData :: [TracTicket] -> [TracCustomFieldRelation] -> [TracTicketComment] -> [TracTicket]
