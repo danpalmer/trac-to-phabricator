@@ -1,0 +1,28 @@
+{
+  "patch": {
+    "name": "Patch"
+  },
+  "closed": {
+    "name": "Closed",
+    "closed": true,
+    "special": "closed"
+  },
+  "merge": {
+    "name": "Merge"
+  },
+  "infoneeded": {
+    "name": "Infoneeded"
+  },
+  "new": {
+    "name": "New",
+    "special": "default"
+  },
+  "upstream": {
+    "name": "Upstream"
+  },
+  "duplicate": {
+    "name": "Duplicate",
+    "special": "duplicate",
+    "closed": true
+  }
+}
