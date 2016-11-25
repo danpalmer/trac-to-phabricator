@@ -36,8 +36,8 @@ instance FromRow TracTicket where
     fromRow = TracTicket
         <$> field
         <*> field
-        <*> (liftM tracTimeToDiffTime field)
-        <*> (liftM tracTimeToDiffTime field)
+        <*> fmap tracTimeToDiffTime field
+        <*> fmap tracTimeToDiffTime field
         <*> field
         <*> field
         <*> field
@@ -67,7 +67,7 @@ data TracCustomFieldRelation = TracCustomFieldRelation
 instance FromRow TracCustomFieldRelation where
     fromRow = TracCustomFieldRelation
         <$> field
-        <*> (liftM2 TracCustomField field field)
+        <*> liftM2 TracCustomField field field
 
 data TracTicketChange = TracTicketChange
     { ch_ticket :: Int
@@ -81,7 +81,7 @@ data TracTicketChange = TracTicketChange
 instance FromRow TracTicketChange where
     fromRow = TracTicketChange
         <$> field
-        <*> (liftM tracTimeToDiffTime field)
+        <*> fmap tracTimeToDiffTime field
         <*> field
         <*> field
         <*> field
@@ -97,7 +97,7 @@ data TracTicketComment = TracTicketComment
 instance FromRow TracTicketComment where
     fromRow = TracTicketComment
         <$> field
-        <*> (liftM tracTimeToDiffTime field)
+        <*> fmap tracTimeToDiffTime field
         <*> field
         <*  (field :: RowParser Text)
         <*  (field :: RowParser Text)
