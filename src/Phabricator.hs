@@ -50,18 +50,21 @@ data ManiphestTicket = ManiphestTicket
     , m_modified :: DiffTime
     , m_phid :: Maybe ManiphestTicketPHID
     , m_status :: Text
+		, m_changes :: [Comment]
     } deriving (Show)
+
+type Comment = TracTicketComment
 
 
 mysqlToUser :: [MySQLValue] -> Maybe PhabricatorUser
 mysqlToUser values =
     case values of
-        (x:y:[]) -> PhabricatorUser <$> (decodePHID x) <*> (decodeUserName y)
+        [x,y] -> PhabricatorUser <$> (decodePHID x) <*> (decodeUserName y)
         _ -> Nothing
 
     where
         decodePHID p = case p of
-            MySQLBytes v -> Just $ PHID $ decodeUtf8 v
+            MySQLBytes v -> Just . PHID $ decodeUtf8 v
             _ -> Nothing
         decodeUserName u = case u of
             MySQLText t -> Just t
@@ -69,25 +72,26 @@ mysqlToUser values =
 
 
 mysqlToUsers :: [[MySQLValue]] -> [PhabricatorUser]
-mysqlToUsers = catMaybes . (map mysqlToUser)
+mysqlToUsers = mapMaybe mysqlToUser
 
 
-getPhabricatorUsers :: IO ([PhabricatorUser])
+getPhabricatorUsers :: IO [PhabricatorUser]
 getPhabricatorUsers = do
     conn <- connect defaultConnectInfo {ciDatabase = "phabricator_user", ciPassword = "foobar", ciPort = 32773}
     (_, rawUsersStream) <- query_ conn "SELECT phid, userName FROM user"
     close conn
     rawUsers <- toList rawUsersStream
     let users = mysqlToUsers rawUsers
-    putStrLn $ show users
+    print users
     return []
 
 
-createPhabricatorTickets :: [ManiphestTicket] -> IO ([ManiphestTicket])
+createPhabricatorTickets :: [ManiphestTicket] -> IO [ManiphestTicket]
 createPhabricatorTickets tickets = do
     tickets' <- mapM createPhabricatorTicket tickets
-    mapM (putStrLn . T.unpack) $ lefts tickets'
+    mapM_ (putStrLn . T.unpack) $ lefts tickets'
     return $ rights tickets'
+
 
 
 createPhabricatorTicket :: ManiphestTicket -> IO (Either Text ManiphestTicket)
@@ -142,7 +146,7 @@ ticketToUpdateTuple ticket =
             , MySQLText $ m_status ticket
             , MySQLText t
             ]
-        otherwise -> Nothing
+        Nothing -> Nothing
 
 
 convertTime :: DiffTime -> Int64
