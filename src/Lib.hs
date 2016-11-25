@@ -50,6 +50,7 @@ tracTicketToPhabricatorTicket users ticket =
         , m_modified = t_changetime $ ticket
         , m_phid = Nothing
         , m_status = t_status ticket
+        , m_changes = t_comments ticket
         }
     where findUser = lookupPhabricatorUserPHID users
 

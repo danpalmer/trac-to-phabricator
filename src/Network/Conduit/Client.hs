@@ -26,6 +26,7 @@ import           Data.Time.Clock.POSIX      (getPOSIXTime)
 import           GHC.Generics               hiding (to)
 import           Network.Http.Client        as HC
 import           Network.Http.Client.Extras as HC
+import Debug.Trace
 
 ----------------------------------------------------------------------------
 

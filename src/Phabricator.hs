@@ -1,12 +1,14 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Phabricator where
 
 import GHC.Generics
 import Data.Int
-import Data.Maybe (catMaybes, fromJust)
+import Data.Maybe (catMaybes, fromJust, mapMaybe)
 import Data.Either (lefts, rights)
 import Data.Monoid ((<>))
 import Data.Text (Text)
@@ -77,7 +79,7 @@ mysqlToUsers = mapMaybe mysqlToUser
 
 getPhabricatorUsers :: IO [PhabricatorUser]
 getPhabricatorUsers = do
-    conn <- connect defaultConnectInfo {ciDatabase = "phabricator_user", ciPassword = "foobar", ciPort = 32773}
+    conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_user" })
     (_, rawUsersStream) <- query_ conn "SELECT phid, userName FROM user"
     close conn
     rawUsers <- toList rawUsersStream
@@ -96,12 +98,19 @@ createPhabricatorTickets tickets = do
 
 createPhabricatorTicket :: ManiphestTicket -> IO (Either Text ManiphestTicket)
 createPhabricatorTicket ticket = do
-    let authToken = ConduitAPITokenAuth "api-gptwkv5kg4nayou7gl5zasm3u5hu"
-    let conduit = Conduit "http://phabricator.dev/api" authToken
     response <- callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs ticket)
-    return $ case response of
-        ConduitResult phidResponse -> Right ticket {m_phid = Just (api_phid phidResponse)}
-        ConduitError code info -> Left (code `T.append` info)
+    case response of
+        ConduitResult phidResponse -> do
+          res <- postComment (api_phid phidResponse) ticket
+          traceShowM res
+          return $ Right ticket {m_phid = Just (api_phid phidResponse)}
+        ConduitError code info -> return $ Left (code `T.append` info)
+
+buildTransactions :: ManiphestTicket -> [Value]
+buildTransactions ManiphestTicket{m_changes} = map doOne (traceShowId m_changes)
+	where
+		doOne :: Comment -> Value
+		doOne (TracTicketComment{..}) = object ["type" .= ("comment" :: Text) , "value" .= convert (co_comment)]
 
 
 ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
@@ -110,8 +119,14 @@ ticketToConduitPairs ticket =
     , "description"  .= (m_description ticket)
     , "ownerPHID" .= (m_ownerPHID ticket)
     , "priority" .= (priorityToInteger $ m_priority ticket)
-    , "projectPHIDs" .= ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
+--    , "projectPHIDs" .= []  -- ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
     ]
+
+postComment :: ManiphestTicketPHID -> ManiphestTicket -> IO (ConduitResponse Object)
+postComment phid mt = do
+  res <- callConduitPairs conduit "maniphest.edit" [ "objectIdentifier" .= phid , "transactions" .= buildTransactions mt ]
+  return res
+
 
 
 priorityToInteger :: ManiphestPriority -> Integer
@@ -127,11 +142,12 @@ priorityToInteger p =
 
 updatePhabricatorTickets :: [ManiphestTicket] -> IO ()
 updatePhabricatorTickets tickets = do
-    conn <- connect defaultConnectInfo {ciDatabase = "phabricator_maniphest", ciPassword = "foobar", ciPort = 32773}
+    conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
     let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=? WHERE phid=?;"
-    forM_ tickets $ \ticket -> do
+        q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=?" -- Some queries go from this separate table rather than the actual information in the ticket.
+    forM_ tickets $ \ticket ->
         case ticketToUpdateTuple ticket of
-            Just values -> void $ execute conn q values
+            Just values -> void $ execute conn q values >> execute conn q2 [values !! 0, values !! 3]
             Nothing -> return ()
     close conn
     return ()
