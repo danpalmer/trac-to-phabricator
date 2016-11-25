@@ -8,9 +8,8 @@ module Phabricator where
 
 import GHC.Generics
 import Data.Int
-import Data.Maybe (catMaybes, fromJust, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Either (lefts, rights)
-import Data.Monoid ((<>))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Aeson
@@ -28,6 +27,7 @@ import Config
 
 import qualified Trac.Convert as T
 
+convert :: Text -> Text
 convert = T.pack . T.convert . T.unpack
 
 data ManiphestTicketID = ManiphestTicketID
@@ -59,7 +59,7 @@ data ManiphestTicket = ManiphestTicket
     , m_modified :: DiffTime
     , m_phid :: Maybe ManiphestTicketPHID
     , m_status :: Text
-		, m_changes :: [Comment]
+    , m_changes :: [Comment]
     } deriving (Show)
 
 type Comment = TracTicketComment
@@ -115,9 +115,10 @@ createPhabricatorTicket ticket = do
 
 buildTransactions :: ManiphestTicket -> [Value]
 buildTransactions ManiphestTicket{m_changes} = map doOne (traceShowId m_changes)
-	where
-		doOne :: Comment -> Value
-		doOne (TracTicketComment{..}) = object ["type" .= ("comment" :: Text) , "value" .= convert (co_comment)]
+  where
+    doOne :: Comment -> Value
+    doOne (TracTicketComment{..}) = object ["type" .= ("comment" :: Text)
+                                           , "value" .= convert (co_comment)]
 
 
 ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
@@ -131,7 +132,9 @@ ticketToConduitPairs ticket =
 
 postComment :: ManiphestTicketPHID -> ManiphestTicket -> IO (ConduitResponse Object)
 postComment phid mt = do
-  res <- callConduitPairs conduit "maniphest.edit" [ "objectIdentifier" .= phid , "transactions" .= buildTransactions mt ]
+  res <- callConduitPairs conduit "maniphest.edit"
+            [ "objectIdentifier" .= phid
+            , "transactions" .= buildTransactions mt ]
   return res
 
 
@@ -151,7 +154,8 @@ updatePhabricatorTickets :: [ManiphestTicket] -> IO ()
 updatePhabricatorTickets tickets = do
     conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
     let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=? WHERE phid=?;"
-        q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=?" -- Some queries go from this separate table rather than the actual information in the ticket.
+        -- Some queries go from this separate table rather than the actual information in the ticket.
+        q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=?"
     forM_ tickets $ \ticket ->
         case ticketToUpdateTuple ticket of
             Just values -> void $ execute conn q values >> execute conn q2 [values !! 0, values !! 3]

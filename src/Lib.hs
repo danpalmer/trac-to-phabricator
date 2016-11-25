@@ -5,17 +5,15 @@
 
 module Lib
     ( migrate
+    , describeTicket
     ) where
 
-import Data.Maybe (listToMaybe)
-import Data.Monoid ((<>))
 import qualified Data.Text as T
 import Data.List (find)
 
 import Trac
 import Phabricator
 import Debug.Trace
-import qualified Trac.Convert as T
 
 migrate :: IO ()
 migrate = do

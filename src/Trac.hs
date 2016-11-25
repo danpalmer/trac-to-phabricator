@@ -7,7 +7,7 @@ module Trac where
 import GHC.Generics
 import Data.Text (Text)
 import qualified Data.Text as T
-import Control.Monad (liftM, liftM2)
+import Control.Monad (liftM2)
 import Data.Time.Clock (DiffTime, picosecondsToDiffTime)
 import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.FromRow
@@ -183,9 +183,9 @@ getComments :: TracTicketChange -> Maybe TracTicketComment
 getComments TracTicketChange{..} =
   -- If a user makes a change to the ticket, an empty comment is also added
   -- to the changes
-	if ch_field == "comment" && not (T.null (fromMaybe "" ch_newvalue))
-		then Just $ TracTicketComment ch_ticket ch_time ch_author (fromJust ch_newvalue)
-		else Nothing
+  if ch_field == "comment" && not (T.null (fromMaybe "" ch_newvalue))
+    then Just $ TracTicketComment ch_ticket ch_time ch_author (fromJust ch_newvalue)
+    else Nothing
 
 
 getTracTickets :: IO [TracTicket]

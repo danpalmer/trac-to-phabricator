@@ -2,7 +2,6 @@
 module Config where
 
 import Network.Conduit.Client
-import Data.Text
 import qualified Database.MySQL.Base as M
 import qualified Database.PostgreSQL.Simple as P
 
@@ -21,10 +20,11 @@ phabConnectInfo =
                        , M.ciHost = "127.0.0.1"
                        , M.ciPort = 12345}
 
+tracConnectInfo :: P.ConnectInfo
 tracConnectInfo =
   P.defaultConnectInfo { P.connectDatabase = "trac_ghc"}
 
 conduitAPIUrl = "http://192.168.1.3/api"
 
-
+conduit :: Conduit
 conduit = Conduit conduitAPIUrl (authToken conduitConfig)
