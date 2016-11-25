@@ -65,4 +65,4 @@ convertPriority priority =
 
 lookupPhabricatorUserPHID :: [PhabricatorUser] -> T.Text -> Maybe UserID
 lookupPhabricatorUserPHID users username  =
-    fmap u_phid $ listToMaybe $ filter (\x -> u_userName x == username) users
+    fmap u_phid $ find (\x -> u_userName x == username) users
