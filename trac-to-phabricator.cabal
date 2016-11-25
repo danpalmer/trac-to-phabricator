@@ -20,6 +20,7 @@ library
                      , Network.Http.Client.Extras
                      , Phabricator
                      , Trac
+                     , Config
   build-depends:       base >= 4.7 && < 5
                      , time
                      , network-uri

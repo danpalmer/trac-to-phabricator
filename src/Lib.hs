@@ -10,6 +10,7 @@ module Lib
 import Data.Maybe (listToMaybe)
 import Data.Monoid ((<>))
 import qualified Data.Text as T
+import Data.List (find)
 
 import Trac
 import Phabricator
