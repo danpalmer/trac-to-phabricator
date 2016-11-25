@@ -2,11 +2,16 @@
 
 ##### To do
 
- - [ ] Extract Trac Postrgres connection details to configuration
- - [ ] Extract Phabricator MySQL connection details to configuration
- - [ ] Extract GHC project PHID to configuration
- - [ ] Extract Phabricator API details to configuration
- - [ ] Copy comment history across to Phabricator
+ - [X] Extract Trac Postrgres connection details to configuration
+ - [X] Extract Phabricator MySQL connection details to configuration
+ - [X] Extract GHC project PHID to configuration
+ - [X] Extract Phabricator API details to configuration
+ - [X] Copy comment history across to Phabricator
+ - [ ] Update the comment transaction
+ - [ ] Implement tags == projects and see what that looks like
+ - [ ] Modify the parser to convert trac links to phab links
+ - [ ] Fix inefficient comment/ticket pairing
+ - [ ] Implement other events (cc, assignment, etc)
  - [ ] Copy custom field data across to Phabricator
  - [ ] Copy attachments across to Phabricator
  - [ ] Alert when target user does not exist
