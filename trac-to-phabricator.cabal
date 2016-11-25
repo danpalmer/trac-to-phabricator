@@ -35,6 +35,7 @@ library
                      , cryptohash
                      , postgresql-simple
                      , mysql-haskell
+                     , trac-to-remarkup
   default-language:    Haskell2010
 
 executable trac-to-phabricator-exe

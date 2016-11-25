@@ -14,13 +14,16 @@ import Data.List (find)
 
 import Trac
 import Phabricator
-
+import Debug.Trace
+import qualified Trac.Convert as T
 
 migrate :: IO ()
 migrate = do
     phabricatorUsers <- getPhabricatorUsers
+    traceShowM ("phabUsers", phabricatorUsers)
     tracTickets <- getTracTickets
-    let tracTickets' = take 3 tracTickets
+    traceShowM ("tickets", length $ tracTickets)
+    let tracTickets' = take 3 (reverse tracTickets)
     let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
     phabricatorTickets' <- createPhabricatorTickets phabricatorTickets
     updatePhabricatorTickets phabricatorTickets'
@@ -42,7 +45,7 @@ tracTicketToPhabricatorTicket :: [PhabricatorUser] -> TracTicket -> ManiphestTic
 tracTicketToPhabricatorTicket users ticket =
     ManiphestTicket
         { m_title = (t_summary ticket)
-        , m_description = t_description ticket
+        , m_description = convert <$> (t_description ticket)
         , m_ownerPHID = findUser =<< t_owner ticket
         , m_authorPHID = findUser $ t_reporter ticket
         , m_priority = convertPriority $ t_priority ticket

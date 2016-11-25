@@ -22,6 +22,13 @@ import System.IO.Streams.List (toList)
 import Database.MySQL.Base
 import Network.Conduit.Client
 import Control.Monad
+import Trac
+import Debug.Trace
+import Config
+
+import qualified Trac.Convert as T
+
+convert = T.pack . T.convert . T.unpack
 
 data ManiphestTicketID = ManiphestTicketID
 type ManiphestTicketPHID = PHID ManiphestTicketID
