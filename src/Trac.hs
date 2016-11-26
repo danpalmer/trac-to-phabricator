@@ -13,6 +13,8 @@ import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.FromRow
 import Data.Maybe
 import Config
+import Data.IntMap (IntMap, (!))
+import qualified Data.IntMap as M
 
 data TracTicket = TracTicket
     { t_id :: Int
@@ -162,20 +164,34 @@ mergeTracData :: [TracTicket] -> [TracCustomFieldRelation] -> [TracTicketChange]
 mergeTracData tickets fields comments
   = mergeTicketsAndComments (mergeTicketsAndCustomFields tickets fields) comments
 
+type DList a = [a] -> [a]
+
+emptyD :: [a] -> [a]
+emptyD = id
+
+singletonD :: a -> [a] -> [a]
+singletonD = (:)
+
+concatD :: DList a ->  DList a -> DList a
+concatD = (.)
 
 mergeTicketsAndCustomFields :: [TracTicket] -> [TracCustomFieldRelation] -> [TracTicket]
 mergeTicketsAndCustomFields tickets customFields = fmap merge tickets
     where
-        merge ticket = ticket {t_customFields = cfr_customField <$> fields ticket}
-        fields ticket = filter (\x -> t_id ticket == cfr_ticket x) customFields
+        bucket :: IntMap (DList TracCustomField)
+        bucket = M.fromAscListWith concatD [(cfr_ticket x, (singletonD (cfr_customField x))) | x <- customFields]
+        merge ticket = ticket {t_customFields = (fields ticket) }
+        fields ticket = (bucket ! t_id ticket) $ []
 
 -- Very expensive currently
 mergeTicketsAndComments :: [TracTicket] -> [TracTicketChange] -> [TracTicket]
 mergeTicketsAndComments tickets changes = map merge tickets
     where
         comments = mapMaybe getComments changes
+        bucket :: IntMap (DList TracTicketComment)
+        bucket = M.fromAscListWith concatD [(co_ticket x, singletonD x) | x <- comments]
         merge ticket = ticket {t_comments = ticketComments ticket}
-        ticketComments ticket = filter (\x -> t_id ticket == co_ticket x) comments
+        ticketComments ticket = bucket ! t_id ticket $ []
 
 -- Going to change this into a more general method which maps a change to
 -- a maniphest update
@@ -192,7 +208,7 @@ getTracTickets :: IO [TracTicket]
 getTracTickets = do
     conn <- connect tracConnectInfo
     rawTickets <- query_ conn "SELECT * FROM ticket"
-    customFields <- query_ conn "SELECT * FROM ticket_custom"
-    ticketUpdates <- query_ conn "SELECT * FROM ticket_change"
+    customFields <- query_ conn "SELECT * FROM ticket_custom ORDER BY ticket"
+    ticketUpdates <- query_ conn "SELECT * FROM ticket_change ORDER BY ticket"
     close conn
     return $ mergeTracData rawTickets customFields ticketUpdates
