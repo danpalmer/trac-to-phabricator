@@ -8,6 +8,7 @@
  - [X] Extract Phabricator API details to configuration
  - [X] Copy comment history across to Phabricator
  - [ ] Update the comment transaction
+ - [ ] Worry about why sorting by creation date doesn't work properly
  - [ ] Implement tags == projects and see what that looks like
  - [ ] Modify the parser to convert trac links to phab links
  - [ ] Fix inefficient comment/ticket pairing
