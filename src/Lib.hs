@@ -18,14 +18,17 @@ import Config
 import Types
 import Debug.Trace
 import Data.Maybe
+import Data.List
+import Data.Ord
+import Control.Applicative
 
-migrate :: IO ()
-migrate = do
+migrate :: Int -> IO ()
+migrate n = do
     phabricatorUsers <- getPhabricatorUsers
     traceShowM ("phabUsers", length phabricatorUsers)
     tracTickets <- getTracTickets
     traceShowM ("tickets", length tracTickets)
-    let tracTickets' = take 1 (reverse tracTickets)
+    let tracTickets' = take n (sortBy (comparing t_id) tracTickets)
     let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
     createPhabricatorTickets phabricatorTickets
     putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
@@ -45,7 +48,8 @@ describeTicket ticket = T.unpack $
 tracTicketToPhabricatorTicket :: [PhabricatorUser] -> TracTicket -> ManiphestTicket
 tracTicketToPhabricatorTicket users ticket =
     ManiphestTicket
-        { m_title = t_summary ticket
+        { m_tracn = t_id ticket
+        , m_title = t_summary ticket
         , m_description = convert <$> t_description ticket
         , m_ownerPHID = findUser <$> t_owner ticket
         , m_authorPHID = findUser $ t_reporter ticket
@@ -55,18 +59,56 @@ tracTicketToPhabricatorTicket users ticket =
         , m_phid = Nothing
         , m_status = t_status ticket
         , m_changes = map (tracChangeToPhabChange users) (t_comments ticket)
+        , m_cc = mapMaybe lookupCC (t_cc ticket)
         }
-    where findUser u = fromMaybe (traceShow ("Could not find", u) botUser) (lookupPhabricatorUserPHID users u)
+    where findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
+          -- CC field is either an email or a username
+          lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
+
+-- I don't have mails to check now
+lookupByEmail = const Nothing
 
 tracChangeToPhabChange :: [PhabricatorUser] -> TracTicketChange -> ManiphestChange
 tracChangeToPhabChange users TracTicketChange{..}
   = ManiphestChange
-      { mc_type    = ch_field
+      { mc_type    = getType ch_field
       , mc_created = ch_time
-      , mc_comment = fromMaybe "" ch_newvalue
       , mc_authorId = findUser ch_author }
   where
-    findUser u = fromMaybe (traceShow ("Could not find", u) botUser) (lookupPhabricatorUserPHID users u)
+    findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
+    getType :: T.Text -> MCType
+    getType t =
+      case t of
+        "comment" -> MCComment (convert $ fromMaybe "" ch_newvalue)
+        "cc"      -> MCCC (maybe [] (\v -> mapMaybe lookupCC (parse_cc v)) ch_newvalue)
+        "architecture" -> maybe Dummy MCArchitecture ch_newvalue
+        "blockedby" -> MCBlockedBy []
+--        "blocking"  -> MCBlocking []
+        "component" -> m MCComponent
+        "description" -> m MCDescription
+        "differential" -> MCDifferential []
+        "difficulty"   -> m MCDifficulty
+        "failure"      -> m MCFailure
+        "keywords"     -> MCKeywords []
+        "milestone"    -> m MCMilestone
+        "os"           -> m MCOS
+        "owner"        -> Dummy
+        "patch"        -> MCPatch
+        "priority"     -> MCPriority (maybe Normal convertPriority ch_newvalue)
+        "related"      -> MCRelated
+        "reporter"     -> MCReporter
+        "resolution"   -> MCResolution
+        "severity"     -> MCSeverity
+        "status"       -> m MCStatus
+        "summary"      -> m MCSummary
+        "testcase"     -> MCTestcase
+        "type"         -> m MCType
+        "version"      -> m MCVersion
+        "wikipage"     -> m MCWiki
+        _         -> Dummy
+
+    m con = maybe Dummy con ch_newvalue
+    lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
 
 
 convertPriority :: T.Text -> ManiphestPriority

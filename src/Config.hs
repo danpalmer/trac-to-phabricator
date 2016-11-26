@@ -11,7 +11,7 @@ data ConduitConfig =
     { authToken :: ConduitAuth }
 
 -- The ID of the user doing the migration
-botUser :: ManiphestAuthorPHID
+botUser :: UserID
 botUser = PHID "PHID-USER-r77ofkse6266v7ngjzlk"
 
 

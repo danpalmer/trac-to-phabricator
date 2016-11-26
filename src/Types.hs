@@ -6,17 +6,20 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Trac.Convert as T
 
-import Network.Conduit.Client
+import Network.Conduit.Client hiding (User)
 
 convert :: Text -> Text
 convert = T.pack . T.convert . T.unpack
 
 -- Used as a kind
-data PHIDType = Ticket | Author | Transaction
+data PHIDType = Ticket | User | Transaction | Diff | Project
 
-type ManiphestTicketPHID = PHID 'Ticket
-type ManiphestTransactionPHID = PHID 'Transaction
-type ManiphestAuthorPHID = PHID 'Author
+
+type TicketID = PHID 'Ticket
+type TransactionID = PHID 'Transaction
+type UserID        = PHID 'User
+type DiffID        = PHID 'Diff
+type ProjectID     = PHID 'Project
 
 unwrapPHID :: PHID a -> Text
 unwrapPHID (PHID t) = t

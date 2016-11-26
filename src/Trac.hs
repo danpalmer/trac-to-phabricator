@@ -17,6 +17,7 @@ import Data.IntMap (IntMap, (!))
 import Data.Ord
 import Data.List
 import qualified Data.IntMap as M
+import Debug.Trace
 
 data TracTicket = TracTicket
     { t_id :: Int
@@ -28,7 +29,7 @@ data TracTicket = TracTicket
     , t_priority :: Text
     , t_owner :: Maybe Text
     , t_reporter :: Text
-    , t_cc :: Maybe Text
+    , t_cc :: [Text]
     , t_version :: Maybe Text
     , t_milestone :: Maybe Text
     , t_status :: Text
@@ -51,7 +52,7 @@ instance FromRow TracTicket where
         <*> field
         <*> field
         <*> field
-        <*> field
+        <*> (maybe [] parse_cc <$> (field :: RowParser (Maybe Text)))
         <*> field
         <*> field
         <*> field
@@ -61,6 +62,9 @@ instance FromRow TracTicket where
         <*> field
         <*> pure []
         <*> pure []
+
+parse_cc :: Text -> [Text]
+parse_cc = map T.strip . T.splitOn ","
 
 data TracCustomField = TracCustomField
     { cf_name :: Text
