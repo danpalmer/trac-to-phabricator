@@ -181,9 +181,8 @@ mergeTicketsAndCustomFields tickets customFields = fmap merge tickets
         bucket :: IntMap (DList TracCustomField)
         bucket = M.fromAscListWith concatD [(cfr_ticket x, (singletonD (cfr_customField x))) | x <- customFields]
         merge ticket = ticket {t_customFields = (fields ticket) }
-        fields ticket = (bucket ! t_id ticket) $ []
+        fields ticket = M.findWithDefault id (t_id ticket) bucket $ []
 
--- Very expensive currently
 mergeTicketsAndComments :: [TracTicket] -> [TracTicketChange] -> [TracTicket]
 mergeTicketsAndComments tickets changes = map merge tickets
     where
@@ -191,7 +190,7 @@ mergeTicketsAndComments tickets changes = map merge tickets
         bucket :: IntMap (DList TracTicketComment)
         bucket = M.fromAscListWith concatD [(co_ticket x, singletonD x) | x <- comments]
         merge ticket = ticket {t_comments = ticketComments ticket}
-        ticketComments ticket = bucket ! t_id ticket $ []
+        ticketComments ticket = M.findWithDefault id (t_id ticket) bucket $ []
 
 -- Going to change this into a more general method which maps a change to
 -- a maniphest update

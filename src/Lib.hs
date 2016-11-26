@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RecordWildCards #-}
 
 
 module Lib
@@ -13,12 +14,15 @@ import Data.List (find)
 
 import Trac
 import Phabricator
+import Config
+import Types
 import Debug.Trace
+import Data.Maybe
 
 migrate :: IO ()
 migrate = do
     phabricatorUsers <- getPhabricatorUsers
-    traceShowM ("phabUsers", phabricatorUsers)
+    traceShowM ("phabUsers", length phabricatorUsers)
     tracTickets <- getTracTickets
     traceShowM ("tickets", length $ tracTickets)
     let tracTickets' = take 3 (reverse tracTickets)
@@ -43,16 +47,26 @@ tracTicketToPhabricatorTicket users ticket =
     ManiphestTicket
         { m_title = (t_summary ticket)
         , m_description = convert <$> (t_description ticket)
-        , m_ownerPHID = findUser =<< t_owner ticket
+        , m_ownerPHID = findUser <$> t_owner ticket
         , m_authorPHID = findUser $ t_reporter ticket
         , m_priority = convertPriority $ t_priority ticket
         , m_created = t_time $ ticket
         , m_modified = t_changetime $ ticket
         , m_phid = Nothing
         , m_status = t_status ticket
-        , m_changes = t_comments ticket
+        , m_changes = map (tracCommentToPhabComment users) (t_comments ticket)
         }
-    where findUser = lookupPhabricatorUserPHID users
+    where findUser u = fromMaybe (traceShow ("Could not find", u) botUser) (lookupPhabricatorUserPHID users u)
+
+tracCommentToPhabComment :: [PhabricatorUser] -> TracTicketComment -> ManiphestComment
+tracCommentToPhabComment users (TracTicketComment{..})
+  = ManiphestComment
+      { mc_created = co_time
+      , mc_comment = co_comment
+      , mc_authorId = findUser co_author }
+  where
+    findUser u = fromMaybe (traceShow ("Could not find", u) botUser) (lookupPhabricatorUserPHID users u)
+
 
 convertPriority :: T.Text -> ManiphestPriority
 convertPriority priority =

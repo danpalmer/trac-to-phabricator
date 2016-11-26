@@ -4,6 +4,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Phabricator where
@@ -26,18 +27,11 @@ import Control.Monad
 import Trac
 import Debug.Trace
 import Config
+import Types
 
 import qualified Trac.Convert as T
 
-convert :: Text -> Text
-convert = T.pack . T.convert . T.unpack
 
--- Used as a kind
-data PHIDType = Ticket | Author | Transaction
-
-type ManiphestTicketPHID = PHID 'Ticket
-type ManiphestTransactionPHID = PHID 'Transaction
-type ManiphestAuthorPHID = PHID 'Author
 
 data APIPHID = APIPHID
     { api_phid :: ManiphestTicketPHID
@@ -49,24 +43,30 @@ data ManiphestPriority = Unbreak | Triage | High | Normal | Low | Wishlist
     deriving (Show)
 
 data PhabricatorUser = PhabricatorUser
-    { u_phid         :: PHID PhabricatorUser
+    { u_phid         :: ManiphestAuthorPHID
     , u_userName     :: Text
     } deriving (Show)
 
-type UserID = PHID PhabricatorUser
+type UserID = ManiphestAuthorPHID
 
 data ManiphestTicket = ManiphestTicket
     { m_title :: Text
     , m_description :: Maybe Text
-    , m_authorPHID :: Maybe UserID
+    , m_authorPHID :: UserID
     , m_ownerPHID :: Maybe UserID
     , m_priority :: ManiphestPriority
     , m_created :: DiffTime
     , m_modified :: DiffTime
     , m_phid :: Maybe ManiphestTicketPHID
     , m_status :: Text
-    , m_changes :: [Comment]
+    , m_changes :: [ManiphestComment]
     } deriving (Show)
+
+data ManiphestComment = ManiphestComment
+  { mc_created :: DiffTime
+  , mc_comment :: Text
+  , mc_authorId :: ManiphestAuthorPHID
+  } deriving Show
 
 type Comment = TracTicketComment
 
@@ -120,9 +120,9 @@ createPhabricatorTicket ticket = do
 buildTransactions :: ManiphestTicket -> [Value]
 buildTransactions ManiphestTicket{m_changes} = map doOne (traceShowId m_changes)
   where
-    doOne :: Comment -> Value
-    doOne (TracTicketComment{..}) = object ["type" .= ("comment" :: Text)
-                                           , "value" .= convert (co_comment)]
+    doOne :: ManiphestComment -> Value
+    doOne (ManiphestComment{..}) = object  ["type" .= ("comment" :: Text)
+                                           , "value" .= convert (mc_comment)]
 
 
 ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
@@ -143,9 +143,7 @@ postComment phid mt = do
   let ts = case J.parseEither transactionParser res of
         Left e -> error e
         Right r -> r
-  let   slyfox :: ManiphestAuthorPHID
-        slyfox = PHID "PHID-USER-r77ofkse6266v7ngjzlk"
-  zipWithM_ (\c t -> fixCommentInformation t slyfox (co_time c)) cs ts
+  zipWithM_ (\c t -> fixCommentInformation t (mc_authorId c) (mc_created c)) cs ts
   return ()
 
 transactionParser :: Object -> J.Parser [ManiphestTransactionPHID]
@@ -190,11 +188,22 @@ priorityToInteger p =
 updatePhabricatorTicket :: ManiphestTicket -> IO ()
 updatePhabricatorTicket ticket = do
     conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
-    let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=? WHERE phid=?;"
+    let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=?, authorPHID=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
         q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=?"
+        -- A subscriber is automatically added
+        -- This is where the notification a subscriber is added is
+        -- populated from
+        q3 = "DELETE FROM maniphest_transaction WHERE transactionType=? AND objectPHID=?"
+        -- This is where the subscribers info is populated from
+        q4 = "DELETE FROM edge WHERE src=?"
     case ticketToUpdateTuple ticket of
-      Just values -> void $ execute conn q values >> execute conn q2 [values !! 0, values !! 3]
+      Just values -> do  execute conn q values
+                         execute conn q2 [values !! 0, values !! 4]
+                         execute conn q3 [MySQLText "core:subscribers", values !! 4]
+                         execute conn q4 [values !! 4]
+                         return ()
+
       Nothing -> return ()
     close conn
 
@@ -206,6 +215,7 @@ ticketToUpdateTuple ticket =
             [ MySQLInt64 $ convertTime (m_created ticket)
             , MySQLInt64 $ convertTime (m_modified ticket)
             , MySQLText $ m_status ticket
+            , MySQLText $ unwrapPHID (m_authorPHID ticket)
             , MySQLText t
             ]
         Nothing -> Nothing

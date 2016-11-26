@@ -4,10 +4,15 @@ module Config where
 import Network.Conduit.Client
 import qualified Database.MySQL.Base as M
 import qualified Database.PostgreSQL.Simple as P
+import Types
 
 data ConduitConfig =
   ConduitConfig
     { authToken :: ConduitAuth }
+
+-- The ID of the user doing the migration
+botUser :: ManiphestAuthorPHID
+botUser = PHID "PHID-USER-r77ofkse6266v7ngjzlk"
 
 
 conduitConfig :: ConduitConfig
