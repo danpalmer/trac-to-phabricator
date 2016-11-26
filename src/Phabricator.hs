@@ -62,15 +62,12 @@ data ManiphestTicket = ManiphestTicket
     , m_changes :: [ManiphestChange]
     } deriving (Show)
 
-data ManiphestChange = ManiphestComment
-  { mc_created :: DiffTime
+data ManiphestChange = ManiphestChange
+  { mc_type   :: Text
+  , mc_created :: DiffTime
   , mc_comment :: Text
   , mc_authorId :: ManiphestAuthorPHID
-  } | DoNothing Text deriving Show
-
-isComment :: ManiphestChange -> Bool
-isComment (ManiphestComment {} ) = True
-isComment _ = False
+  } deriving Show
 
 
 mysqlToUser :: [MySQLValue] -> Maybe PhabricatorUser
@@ -124,9 +121,11 @@ buildTransactions :: ManiphestTicket -> [Value]
 buildTransactions ManiphestTicket{m_changes} = mapMaybe doOne (traceShowId m_changes)
   where
     doOne :: ManiphestChange -> Maybe Value
-    doOne ManiphestComment{..} = Just $ object  ["type" .= ("comment" :: Text)
-                                                , "value" .= convert mc_comment]
-    doOne (DoNothing _)        = Nothing
+    doOne ManiphestChange{..} =
+      case mc_type of
+        "comment" -> Just $ object  ["type" .= ("comment" :: Text)
+                                    , "value" .= convert mc_comment]
+        _ -> Nothing
 
 
 ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
@@ -150,6 +149,10 @@ postComment phid mt = do
   traceShowM ts
   zipWithM_ (\c t -> fixCommentInformation t (mc_authorId c) (mc_created c)) cs ts
   return ()
+
+isComment :: ManiphestChange -> Bool
+isComment ManiphestChange{mc_type = "comment"} = True
+isComment _ = False
 
 transactionParser :: Object -> J.Parser [(ManiphestTransactionPHID)]
 transactionParser o = do

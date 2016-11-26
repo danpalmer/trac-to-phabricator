@@ -25,7 +25,7 @@ migrate = do
     traceShowM ("phabUsers", length phabricatorUsers)
     tracTickets <- getTracTickets
     traceShowM ("tickets", length tracTickets)
-    let tracTickets' = take 200 (reverse tracTickets)
+    let tracTickets' = take 1 (reverse tracTickets)
     let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
     createPhabricatorTickets phabricatorTickets
     putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
@@ -60,12 +60,11 @@ tracTicketToPhabricatorTicket users ticket =
 
 tracChangeToPhabChange :: [PhabricatorUser] -> TracTicketChange -> ManiphestChange
 tracChangeToPhabChange users TracTicketChange{..}
-  = case ch_field of
-      "comment" -> ManiphestComment
-                    { mc_created = ch_time
-                    , mc_comment = fromMaybe "" ch_newvalue
-                    , mc_authorId = findUser ch_author }
-      _ -> DoNothing ch_field
+  = ManiphestChange
+      { mc_type    = ch_field
+      , mc_created = ch_time
+      , mc_comment = fromMaybe "" ch_newvalue
+      , mc_authorId = findUser ch_author }
   where
     findUser u = fromMaybe (traceShow ("Could not find", u) botUser) (lookupPhabricatorUserPHID users u)
 

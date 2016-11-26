@@ -203,8 +203,8 @@ getComments TracTicketChange{..} =
   -- If a user makes a change to the ticket, an empty comment is also added
   -- to the changes
   if ch_field == "comment"
-		then maybe False (not . T.null) ch_newvalue
-		else True
+    then maybe False (not . T.null) ch_newvalue
+    else True
 
 
 getTracTickets :: IO [TracTicket]
