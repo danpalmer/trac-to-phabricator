@@ -1,6 +1,6 @@
 flags: {}
 extra-package-dbs: []
-extra-lib-dirs: [/usr/local/opt/openssl/lib]
+extra-include-dirs: [/usr/local/opt/openssl/include]
 packages:
 - '.'
 - '../trac-to-remarkup'
@@ -9,4 +9,5 @@ extra-deps:
 - mysql-haskell-0.5.0.0
 - wire-streams-0.0.2.0
 - word24-1.0.7
-resolver: lts-7.2
+- aeson-1.0.2.1
+resolver: lts-7.10

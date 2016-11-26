@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TypeOperators              #-}
+{-# LANGUAGE PolyKinds                  #-}
 
 -- | See <https://secure.phabricator.com/book/phabdev/article/conduit/>
 module Network.Conduit.Client where

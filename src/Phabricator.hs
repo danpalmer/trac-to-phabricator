@@ -3,6 +3,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Phabricator where
 
@@ -30,8 +32,12 @@ import qualified Trac.Convert as T
 convert :: Text -> Text
 convert = T.pack . T.convert . T.unpack
 
-data ManiphestTicketID = ManiphestTicketID
-type ManiphestTicketPHID = PHID ManiphestTicketID
+-- Used as a kind
+data PHIDType = Ticket | Author | Transaction
+
+type ManiphestTicketPHID = PHID 'Ticket
+type ManiphestTransactionPHID = PHID 'Transaction
+type ManiphestAuthorPHID = PHID 'Author
 
 data APIPHID = APIPHID
     { api_phid :: ManiphestTicketPHID
@@ -91,8 +97,7 @@ getPhabricatorUsers = do
     close conn
     rawUsers <- toList rawUsersStream
     let users = mysqlToUsers rawUsers
-    print users
-    return []
+    return users
 
 
 createPhabricatorTickets :: [ManiphestTicket] -> IO [ManiphestTicket]
@@ -130,12 +135,44 @@ ticketToConduitPairs ticket =
 --    , "projectPHIDs" .= []  -- ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
     ]
 
-postComment :: ManiphestTicketPHID -> ManiphestTicket -> IO (ConduitResponse Object)
+postComment :: ManiphestTicketPHID -> ManiphestTicket -> IO ()
 postComment phid mt = do
-  res <- callConduitPairs conduit "maniphest.edit"
+  let cs = m_changes mt
+  (ConduitResult res :: ConduitResponse Object) <- callConduitPairs conduit "maniphest.edit"
             [ "objectIdentifier" .= phid
             , "transactions" .= buildTransactions mt ]
-  return res
+  let ts = case J.parseEither transactionParser res of
+        Left e -> error e
+        Right r -> r
+  let   slyfox :: ManiphestAuthorPHID
+        slyfox = PHID "PHID-USER-r77ofkse6266v7ngjzlk"
+  zipWithM_ (\c t -> fixCommentInformation t slyfox (co_time c)) cs ts
+  return ()
+
+transactionParser :: Object -> J.Parser [ManiphestTransactionPHID]
+transactionParser o = do
+  traceShowM o
+  ts <- o .: "transactions"
+  J.listParser (withObject "" (\v -> v .: "phid")) ts
+--  parseJSON ts
+
+
+
+-- Need to go into two tables,  phabricator_manifest_transaction and
+-- phabricator_manifest_comment
+fixCommentInformation :: ManiphestTransactionPHID
+                      -> ManiphestAuthorPHID
+                      -> DiffTime
+                      -> IO ()
+fixCommentInformation (PHID tid) (PHID maid) date =
+  let fix1 = "UPDATE maniphest_transaction SET dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?"
+      fix2 = "UPDATE maniphest_transaction_comment SET authorPHID=? WHERE transactionPHID=?"
+      values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText maid, MySQLText tid]
+      values2 = [values1 !! 2, values1 !! 3]
+  in do
+    conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
+    void $ execute conn fix1 values1 >> execute conn fix2 values2
+
 
 
 
