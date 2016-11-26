@@ -23,8 +23,7 @@ migrate = do
     traceShowM ("tickets", length $ tracTickets)
     let tracTickets' = take 3 (reverse tracTickets)
     let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
-    phabricatorTickets' <- createPhabricatorTickets phabricatorTickets
-    updatePhabricatorTickets phabricatorTickets'
+    createPhabricatorTickets phabricatorTickets
     putStrLn $ "Migrated " ++ (show $ length tracTickets') ++ " tickets."
 
 

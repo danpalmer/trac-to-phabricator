@@ -100,22 +100,21 @@ getPhabricatorUsers = do
     return users
 
 
-createPhabricatorTickets :: [ManiphestTicket] -> IO [ManiphestTicket]
+createPhabricatorTickets :: [ManiphestTicket] -> IO ()
 createPhabricatorTickets tickets = do
     tickets' <- mapM createPhabricatorTicket tickets
     mapM_ (putStrLn . T.unpack) $ lefts tickets'
-    return $ rights tickets'
 
 
 
-createPhabricatorTicket :: ManiphestTicket -> IO (Either Text ManiphestTicket)
+createPhabricatorTicket :: ManiphestTicket -> IO (Either Text ())
 createPhabricatorTicket ticket = do
     response <- callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs ticket)
     case response of
         ConduitResult phidResponse -> do
           res <- postComment (api_phid phidResponse) ticket
-          traceShowM res
-          return $ Right ticket {m_phid = Just (api_phid phidResponse)}
+          updatePhabricatorTicket (ticket {m_phid = Just (api_phid phidResponse)})
+          return (Right ())
         ConduitError code info -> return $ Left (code `T.append` info)
 
 buildTransactions :: ManiphestTicket -> [Value]
@@ -188,18 +187,16 @@ priorityToInteger p =
         Wishlist -> 0
 
 
-updatePhabricatorTickets :: [ManiphestTicket] -> IO ()
-updatePhabricatorTickets tickets = do
+updatePhabricatorTicket :: ManiphestTicket -> IO ()
+updatePhabricatorTicket ticket = do
     conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
     let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
         q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=?"
-    forM_ tickets $ \ticket ->
-        case ticketToUpdateTuple ticket of
-            Just values -> void $ execute conn q values >> execute conn q2 [values !! 0, values !! 3]
-            Nothing -> return ()
+    case ticketToUpdateTuple ticket of
+      Just values -> void $ execute conn q values >> execute conn q2 [values !! 0, values !! 3]
+      Nothing -> return ()
     close conn
-    return ()
 
 
 ticketToUpdateTuple :: ManiphestTicket -> Maybe [MySQLValue]
