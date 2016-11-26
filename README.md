@@ -16,6 +16,7 @@
  - [ ] Copy custom field data across to Phabricator
  - [ ] Copy attachments across to Phabricator
  - [ ] Alert when target user does not exist
+ - [ ] Merge together the closely related "resolution" and "status"
 
 ##### Usage
 
