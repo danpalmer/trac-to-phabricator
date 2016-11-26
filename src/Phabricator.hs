@@ -94,8 +94,8 @@ getPhabricatorUsers :: IO [PhabricatorUser]
 getPhabricatorUsers = do
     conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_user" })
     (_, rawUsersStream) <- query_ conn "SELECT phid, userName FROM user"
-    close conn
     rawUsers <- toList rawUsersStream
+    close conn
     let users = mysqlToUsers rawUsers
     return users
 
