@@ -172,6 +172,7 @@ fixCommentInformation (PHID tid) (PHID maid) date =
   in do
     conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
     void $ execute conn fix1 values1 >> execute conn fix2 values2
+    close conn
 
 
 
