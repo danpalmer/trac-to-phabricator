@@ -14,6 +14,8 @@ import Database.PostgreSQL.Simple.FromRow
 import Data.Maybe
 import Config
 import Data.IntMap (IntMap, (!))
+import Data.Ord
+import Data.List
 import qualified Data.IntMap as M
 
 data TracTicket = TracTicket
@@ -35,7 +37,7 @@ data TracTicket = TracTicket
     , t_description :: Maybe Text
     , t_keywords :: Maybe Text
     , t_customFields :: [TracCustomField]
-    , t_comments :: [TracTicketComment]
+    , t_comments :: [TracTicketChange]
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -82,52 +84,52 @@ data TracTicketChange = TracTicketChange
     , ch_field :: Text
     , ch_oldvalue :: Maybe Text
     , ch_newvalue :: Maybe Text
-    }
+    } deriving Show
 
 {-
- _comment15
- failure
- type
- status
- _comment14
- milestone
- reporter
- description
- patch
- wikipage
- severity
- _comment2
- architecture
- _comment6
- _comment9
  _comment0
- differential
- _comment5
- _comment10
- comment
- _comment4
- related
- _comment16
- cc
- summary
- _comment7
- _comment11
- testcase
- difficulty
- keywords
- resolution
- component
- _comment12
- owner
- priority
- _comment8
- blockedby
  _comment1
+ _comment10
+ _comment11
+ _comment12
  _comment13
- blocking
- os
- version
+ _comment14
+ _comment15
+ _comment16
+ _comment2
  _comment3
+ _comment4
+ _comment5
+ _comment6
+ _comment7
+ _comment8
+ _comment9
+ architecture
+ blockedby
+ blocking
+ cc
+ comment
+ component
+ description
+ differential
+ difficulty
+ failure
+ keywords
+ milestone
+ os
+ owner
+ patch
+ priority
+ related
+ reporter
+ resolution
+ severity
+ status
+ summary
+ testcase
+ type
+ version
+ wikipage
 -}
 
 instance FromRow TracTicketChange where
@@ -179,28 +181,30 @@ mergeTicketsAndCustomFields :: [TracTicket] -> [TracCustomFieldRelation] -> [Tra
 mergeTicketsAndCustomFields tickets customFields = fmap merge tickets
     where
         bucket :: IntMap (DList TracCustomField)
-        bucket = M.fromAscListWith concatD [(cfr_ticket x, (singletonD (cfr_customField x))) | x <- customFields]
-        merge ticket = ticket {t_customFields = (fields ticket) }
-        fields ticket = M.findWithDefault id (t_id ticket) bucket $ []
+        bucket = M.fromAscListWith concatD [(cfr_ticket x, singletonD (cfr_customField x)) | x <- customFields]
+        merge ticket = ticket {t_customFields = fields ticket }
+        fields ticket = M.findWithDefault id (t_id ticket) bucket []
 
 mergeTicketsAndComments :: [TracTicket] -> [TracTicketChange] -> [TracTicket]
 mergeTicketsAndComments tickets changes = map merge tickets
     where
-        comments = mapMaybe getComments changes
-        bucket :: IntMap (DList TracTicketComment)
-        bucket = M.fromAscListWith concatD [(co_ticket x, singletonD x) | x <- comments]
+        changes' = filter getComments changes
+        bucket :: IntMap (DList TracTicketChange)
+        bucket = M.fromAscListWith concatD [(ch_ticket x, singletonD x) | x <- changes']
         merge ticket = ticket {t_comments = ticketComments ticket}
-        ticketComments ticket = M.findWithDefault id (t_id ticket) bucket $ []
+        ticketComments ticket =
+          sortBy (comparing ch_time)
+           $ M.findWithDefault id (t_id ticket) bucket []
 
 -- Going to change this into a more general method which maps a change to
 -- a maniphest update
-getComments :: TracTicketChange -> Maybe TracTicketComment
+getComments :: TracTicketChange -> Bool
 getComments TracTicketChange{..} =
   -- If a user makes a change to the ticket, an empty comment is also added
   -- to the changes
-  if ch_field == "comment" && not (T.null (fromMaybe "" ch_newvalue))
-    then Just $ TracTicketComment ch_ticket ch_time ch_author (fromJust ch_newvalue)
-    else Nothing
+  if ch_field == "comment"
+		then maybe False (not . T.null) ch_newvalue
+		else True
 
 
 getTracTickets :: IO [TracTicket]

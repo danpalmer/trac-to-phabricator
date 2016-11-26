@@ -59,22 +59,24 @@ data ManiphestTicket = ManiphestTicket
     , m_modified :: DiffTime
     , m_phid :: Maybe ManiphestTicketPHID
     , m_status :: Text
-    , m_changes :: [ManiphestComment]
+    , m_changes :: [ManiphestChange]
     } deriving (Show)
 
-data ManiphestComment = ManiphestComment
+data ManiphestChange = ManiphestComment
   { mc_created :: DiffTime
   , mc_comment :: Text
   , mc_authorId :: ManiphestAuthorPHID
-  } deriving Show
+  } | DoNothing Text deriving Show
 
-type Comment = TracTicketComment
+isComment :: ManiphestChange -> Bool
+isComment (ManiphestComment {} ) = True
+isComment _ = False
 
 
 mysqlToUser :: [MySQLValue] -> Maybe PhabricatorUser
 mysqlToUser values =
     case values of
-        [x,y] -> PhabricatorUser <$> (decodePHID x) <*> (decodeUserName y)
+        [x,y] -> PhabricatorUser <$> decodePHID x <*> decodeUserName y
         _ -> Nothing
 
     where
@@ -113,44 +115,47 @@ createPhabricatorTicket ticket = do
     case response of
         ConduitResult phidResponse -> do
           res <- postComment (api_phid phidResponse) ticket
+          -- Make sure to do this last
           updatePhabricatorTicket (ticket {m_phid = Just (api_phid phidResponse)})
           return (Right ())
         ConduitError code info -> return $ Left (code `T.append` info)
 
 buildTransactions :: ManiphestTicket -> [Value]
-buildTransactions ManiphestTicket{m_changes} = map doOne (traceShowId m_changes)
+buildTransactions ManiphestTicket{m_changes} = mapMaybe doOne (traceShowId m_changes)
   where
-    doOne :: ManiphestComment -> Value
-    doOne (ManiphestComment{..}) = object  ["type" .= ("comment" :: Text)
-                                           , "value" .= convert (mc_comment)]
+    doOne :: ManiphestChange -> Maybe Value
+    doOne ManiphestComment{..} = Just $ object  ["type" .= ("comment" :: Text)
+                                                , "value" .= convert mc_comment]
+    doOne (DoNothing _)        = Nothing
 
 
 ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
 ticketToConduitPairs ticket =
-    [ "title" .= (m_title ticket)
-    , "description"  .= (m_description ticket)
-    , "ownerPHID" .= (m_ownerPHID ticket)
-    , "priority" .= (priorityToInteger $ m_priority ticket)
+    [ "title" .= m_title ticket
+    , "description"  .= m_description ticket
+    , "ownerPHID" .= m_ownerPHID ticket
+    , "priority" .= priorityToInteger (m_priority ticket)
 --    , "projectPHIDs" .= []  -- ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
     ]
 
 postComment :: ManiphestTicketPHID -> ManiphestTicket -> IO ()
 postComment phid mt = do
-  let cs = m_changes mt
+  let cs = filter isComment (m_changes mt)
   (ConduitResult res :: ConduitResponse Object) <- callConduitPairs conduit "maniphest.edit"
             [ "objectIdentifier" .= phid
             , "transactions" .= buildTransactions mt ]
   let ts = case J.parseEither transactionParser res of
         Left e -> error e
         Right r -> r
+  traceShowM ts
   zipWithM_ (\c t -> fixCommentInformation t (mc_authorId c) (mc_created c)) cs ts
   return ()
 
-transactionParser :: Object -> J.Parser [ManiphestTransactionPHID]
+transactionParser :: Object -> J.Parser [(ManiphestTransactionPHID)]
 transactionParser o = do
-  traceShowM o
   ts <- o .: "transactions"
-  J.listParser (withObject "" (\v -> v .: "phid")) ts
+  traceShowM ts
+  J.listParser (withObject "" ((.: "phid"))) ts
 --  parseJSON ts
 
 
@@ -190,7 +195,7 @@ updatePhabricatorTicket ticket = do
     conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
     let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=?, authorPHID=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
-        q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=?"
+        q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=? AND transactionType='status'"
         -- A subscriber is automatically added
         -- This is where the notification a subscriber is added is
         -- populated from
@@ -199,7 +204,7 @@ updatePhabricatorTicket ticket = do
         q4 = "DELETE FROM edge WHERE src=?"
     case ticketToUpdateTuple ticket of
       Just values -> do  execute conn q values
-                         execute conn q2 [values !! 0, values !! 4]
+                         execute conn q2 [head values, values !! 4]
                          execute conn q3 [MySQLText "core:subscribers", values !! 4]
                          execute conn q4 [values !! 4]
                          return ()
@@ -210,7 +215,7 @@ updatePhabricatorTicket ticket = do
 
 ticketToUpdateTuple :: ManiphestTicket -> Maybe [MySQLValue]
 ticketToUpdateTuple ticket =
-    case (m_phid ticket) of
+    case m_phid ticket of
         Just (PHID t) -> Just
             [ MySQLInt64 $ convertTime (m_created ticket)
             , MySQLInt64 $ convertTime (m_modified ticket)
@@ -222,4 +227,4 @@ ticketToUpdateTuple ticket =
 
 
 convertTime :: DiffTime -> Int64
-convertTime t = fromIntegral $ (diffTimeToPicoseconds t) `div` 1000000
+convertTime t = fromIntegral $ diffTimeToPicoseconds t `div` 1000000
