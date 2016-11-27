@@ -80,7 +80,7 @@ lookupByEmail = const Nothing
 tracChangeToPhabChange :: [PhabricatorUser] -> TracTicketChange -> ManiphestChange
 tracChangeToPhabChange users TracTicketChange{..}
   = ManiphestChange
-      { mc_type    = getType ch_field
+      { mc_type    = traceShowId (getType ch_field)
       , mc_created = ch_time
       , mc_authorId = findUser ch_author }
   where
@@ -101,7 +101,7 @@ tracChangeToPhabChange users TracTicketChange{..}
         "keywords"     -> MCKeywords []
         "milestone"    -> m MCMilestone
         "os"           -> m MCOS
-        "owner"        -> Dummy
+        "owner"        -> maybe Dummy MCOwner (findUser <$> ch_newvalue)
         "patch"        -> MCPatch
         "priority"     -> MCPriority (maybe Normal convertPriority ch_newvalue)
         "related"      -> MCRelated

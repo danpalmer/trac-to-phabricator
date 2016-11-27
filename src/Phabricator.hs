@@ -141,7 +141,7 @@ createPhabricatorTicket ticket = do
         response <- callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs ticket)
         case response of
             ConduitResult phidResponse -> do
-              res <- postComment (api_phid phidResponse) ticket
+              res <- doTransactions (api_phid phidResponse) ticket
             -- Make sure to do this last
               updatePhabricatorTicket (ticket {m_phid = Just (api_phid phidResponse)})
               return (Right ())
@@ -149,8 +149,8 @@ createPhabricatorTicket ticket = do
               traceShowM (m_title ticket, code, info)
               return $ Left (code `T.append` info)
 
-buildTransactions :: ManiphestTicket -> [Value]
-buildTransactions ManiphestTicket{m_changes} = mapMaybe doOne m_changes
+buildTransaction :: ManiphestChange -> Maybe Value
+buildTransaction = doOne
   where
     doOne :: ManiphestChange -> Maybe Value
     doOne ManiphestChange{..} =
@@ -159,7 +159,7 @@ buildTransactions ManiphestTicket{m_changes} = mapMaybe doOne m_changes
         MCCC cs -> Just $ mkTransaction "subscribers.set" cs
         MCArchitecture v -> Just $ mkTransaction "custom.ghc:architecture" v
         MCBlockedBy bs   -> Just $ mkTransaction "parent" bs
-        MCComponent c    -> Just $ mkTransaction "custom.ghc:component" c
+        MCComponent c    -> Just $ mkTransaction "custom.ghc:failure" c
         MCDescription d  -> Just $ mkTransaction "description" d
         MCDifferential d -> Nothing --Just $ mkTransaction "" -- Add edge
         MCDifficulty d   -> Just $ mkTransaction "custom.ghc:difficulty" d
@@ -191,26 +191,44 @@ ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
 ticketToConduitPairs ticket =
     [ "title" .= m_title ticket
     , "description"  .= m_description ticket
-    , "ownerPHID" .= m_ownerPHID ticket
+--    , "ownerPHID" .= m_ownerPHID ticket
     , "priority" .= priorityToInteger (m_priority ticket)
-    , "ccPHIDs" .= m_cc ticket
+--    , "ccPHIDs" .= m_cc ticket
 --    , "projectPHIDs" .= []  -- ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
     ]
 
-postComment :: TicketID -> ManiphestTicket -> IO ()
-postComment phid mt = do
-  let cs =  (m_changes mt)
-  rawres <- callConduitPairs conduit "maniphest.edit"
-            [ "objectIdentifier" .= phid
-            , "transactions" .= buildTransactions mt ]
-  let res = case rawres of
-              ConduitResult r -> r
-              _ -> error (show rawres)
-  let ts = case J.parseEither transactionParser res of
-        Left e -> error e
-        Right r -> r
---  zipWithM_ (\c t -> fixCommentInformation t (mc_authorId c) (mc_created c)) cs ts
-  return ()
+doTransactions :: TicketID -> ManiphestTicket -> IO ()
+doTransactions tid mt = do
+  let cs = m_changes mt
+  mapM_ (doOneTransaction tid) cs
+
+-- We have to do each one individually with 10000s of API calls to make
+-- sure we get exactly 0 or 1 transactions for each update so we can match
+-- the author and time information correctly.
+doOneTransaction :: TicketID -> ManiphestChange -> IO ()
+doOneTransaction tid mc = do
+  case buildTransaction mc of
+    Nothing -> return ()
+    Just v  -> do
+      rawres <- callConduitPairs conduit "maniphest.edit"
+                [ "objectIdentifier" .= tid
+                , "transactions" .= [v] ]
+      let res = case rawres of
+                  ConduitResult r -> r
+                  _ -> error (show rawres)
+      let ts = case J.parseEither transactionParser res of
+            Left e -> error e
+            Right r -> r
+      traceShowM ts
+      case ts of
+        -- Uncomment to debug
+        -- ts -> mapM_ (fixTransactionInformation (mc_authorId mc) (mc_created mc)) ts
+        -- Exactly one, do the transaction update
+        [t] -> fixTransactionInformation (mc_authorId mc) (mc_created mc) t
+        -- Zero, the edit had no effect
+        []  -> return ()
+        -- More than one, bad, better to abort
+        _  -> error (show ts)
 
 {-
 isComment :: ManiphestChange -> Bool
@@ -228,11 +246,12 @@ transactionParser o = do
 
 -- Need to go into two tables,  phabricator_manifest_transaction and
 -- phabricator_manifest_comment
-fixCommentInformation :: TransactionID
-                      -> UserID
+fixTransactionInformation ::
+                         UserID
                       -> DiffTime
+                      -> TransactionID
                       -> IO ()
-fixCommentInformation (PHID tid) (PHID maid) date =
+fixTransactionInformation (PHID maid) date (PHID tid) =
   let fix1 = "UPDATE maniphest_transaction SET dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?"
       fix2 = "UPDATE maniphest_transaction_comment SET authorPHID=? WHERE transactionPHID=?"
       values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText maid, MySQLText tid]
