@@ -134,9 +134,11 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         "priority"     -> MCPriority (maybe Normal convertPriority ch_newvalue)
         "related"      -> MCRelated
         "reporter"     -> MCReporter
-        "resolution"   -> MCResolution
+        "resolution"   -> m MCResolution
         "severity"     -> MCSeverity
-        "status"       -> m MCStatus
+        "status"       -> case ch_newvalue of
+                            Nothing -> Dummy
+                            Just v -> if v == "closed" then Dummy else MCStatus v -- A closed ticket always has a resolution
         "summary"      -> m MCSummary
         "testcase"     -> MCTestcase
         "type"         -> m MCType
@@ -148,6 +150,7 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         -- final comment and we don't both to maintain this much fidelity.
 
     m con = maybe Dummy con ch_newvalue
+
     lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
 
     convertKeywords :: T.Text -> [ProjectID]

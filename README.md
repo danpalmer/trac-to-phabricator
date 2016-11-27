@@ -24,6 +24,7 @@
 Parser
 
 - [ ] Ticket 365 block quotes and links in comment 7
+- [ ] Ticket 9226 wikilinks
 
 ##### Usage
 
