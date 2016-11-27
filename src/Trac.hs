@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TupleSections #-}
 
 module Trac where
 
@@ -17,6 +18,7 @@ import Data.IntMap (IntMap, (!))
 import Data.Ord
 import Data.List
 import qualified Data.IntMap as M
+import qualified Data.Set as S
 import Debug.Trace
 
 data TracTicket = TracTicket
@@ -216,3 +218,32 @@ getTracTickets conn = do
     customFields <- query_ conn "SELECT * FROM ticket_custom ORDER BY ticket"
     ticketUpdates <- query_ conn "SELECT * FROM ticket_change ORDER BY ticket"
     return $ mergeTracData rawTickets customFields ticketUpdates
+
+type TracUser = Text
+
+getTracUsers :: Connection -> IO [Text]
+getTracUsers conn = do
+  map fromOnly <$> query_ conn "SELECT DISTINCT author FROM ticket_change"
+
+
+data KeywordType = Keyword deriving Show
+
+-- This is for keywords and also custom more structured fields
+getProjectWords :: Connection -> IO [(KeywordType, Text)]
+getProjectWords conn = do
+  tags <- processKeywords . mapMaybe fromOnly <$> query_ conn "SELECT keywords FROM ticket"
+  return (map (Keyword,) tags)
+
+-- We only pick keywords with at least 10 tickets, seems like a good time
+-- for a cleanup!
+processKeywords :: [Text] -> [Text]
+processKeywords ts =
+  let all = concatMap parse_cc ts
+      uni = nub all
+
+      count x = length . filter (== x)
+      counts = sortBy (comparing snd) (map (\v -> (v, count v all)) uni)
+      final = map fst (filter (\(v, n) -> n > 10) counts)
+  in traceShow counts final
+
+

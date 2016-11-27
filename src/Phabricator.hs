@@ -33,21 +33,22 @@ import qualified Trac.Convert as T
 import qualified Database.MySQL.Base as M
 
 data PhabricatorConnection
-  = PC { pcManiphest :: C 'Ticket , pcUser :: C 'User }
+  = PC { pcManiphest :: C 'Ticket , pcUser :: C 'User, pcProject :: C 'Project }
 
 connectPhab :: IO PhabricatorConnection
 connectPhab = do
   cm <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" }
   cu <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_user" }
-  return (PC cm cu)
+  cp <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_project" }
+  return (PC cm cu cp)
 
 closePhab :: PhabricatorConnection -> IO ()
-closePhab (PC (C c1) (C c2)) = M.close c1 >> M.close c2
+closePhab (PC (C c1) (C c2) (C c3)) = M.close c1 >> M.close c2 >> M.close c3
 
 newtype C a = C { getConn :: M.MySQLConn }
 
-data APIPHID = APIPHID
-    { api_phid :: TicketID
+data APIPHID a = APIPHID
+    { api_phid :: PHID a
     } deriving (Show, Generic)
 
 $(deriveJSON defaultOptions{fieldLabelModifier = drop 4} ''APIPHID)
@@ -59,6 +60,11 @@ data PhabricatorUser = PhabricatorUser
     { u_phid         :: UserID
     , u_userName     :: Text
     } deriving (Show)
+
+data PhabricatorProject = PhabricatorProject
+    { p_phid        :: ProjectID
+    , p_projectName :: Text
+    }
 
 data ManiphestTicket = ManiphestTicket
     { m_tracn :: Int
@@ -124,17 +130,40 @@ mysqlToUser values =
             MySQLText t -> Just t
             _ -> Nothing
 
+mysqlToProject :: [MySQLValue] -> Maybe PhabricatorProject
+mysqlToProject values =
+    case values of
+        [x,y] -> PhabricatorProject <$> decodePHID x <*> decodeUserName y
+        _ -> Nothing
+
+    where
+        decodePHID p = case p of
+            MySQLBytes v -> Just . PHID $ decodeUtf8 v
+            _ -> Nothing
+        decodeUserName u = case u of
+            MySQLText t -> Just t
+            _ -> Nothing
+
 
 mysqlToUsers :: [[MySQLValue]] -> [PhabricatorUser]
 mysqlToUsers = mapMaybe mysqlToUser
+
+mysqlToProjects :: [[MySQLValue]] -> [PhabricatorProject]
+mysqlToProjects = mapMaybe mysqlToProject
 
 
 getPhabricatorUsers :: C 'User -> IO [PhabricatorUser]
 getPhabricatorUsers (C conn) = do
     (_, rawUsersStream) <- query_ conn "SELECT phid, userName FROM user"
     rawUsers <- toList rawUsersStream
-    let users = mysqlToUsers rawUsers
-    return users
+    return $ mysqlToUsers rawUsers
+
+getPhabricatorProjects :: C 'Project -> IO [PhabricatorProject]
+getPhabricatorProjects (C conn) = do
+  (_, rawProjectStream) <- query_ conn "SELECT phid, name FROM project"
+  rawProjects <- toList rawProjectStream
+  return $ mysqlToProjects rawProjects
+
 
 
 createPhabricatorTickets :: C 'Ticket -> [ManiphestTicket] -> IO ()
@@ -319,6 +348,20 @@ ticketToUpdateTuple ticket =
             ]
         Nothing -> Nothing
 
+createProject :: Text -> IO ProjectID
+createProject t = do
+  response <- callConduitPairs conduit "project.create" ["name" .= t
+                                                        -- The API call
+                                                        -- fails if you
+                                                        -- don't pass this
+                                                        -- param
+                                                        , "members" .= ([] :: [()])]
+  traceShowM (response :: ConduitResponse (APIPHID 'Project))
+  case response of
+    ConduitResult (APIPHID a) -> return a
+    ConduitError {} -> error (show response)
+
 
 convertTime :: DiffTime -> Int64
 convertTime t = fromIntegral $ diffTimeToPicoseconds t `div` 1000000
+

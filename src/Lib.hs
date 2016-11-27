@@ -33,12 +33,27 @@ migrate :: WorkDescription -> IO ()
 migrate workDesc = do
     tracConn <- P.connect tracConnectInfo
     pc@PC{..} <- connectPhab
+
+    -- Users
     phabricatorUsers <- getPhabricatorUsers pcUser
+    tracUsers <- getTracUsers tracConn
     traceShowM ("phabUsers", length phabricatorUsers)
+    traceShowM ("tracUsers", length tracUsers)
+
+    -- Projects
+    kws <- getProjectWords tracConn
+--    mapM_ (createProject . snd) kws
+    projectMap <- getPhabricatorProjects pcProject
+
+    traceShowM ("words", length $ projectMap)
+
+
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
     let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
-    let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
+    let phabricatorTickets
+          = map (tracTicketToPhabricatorTicket phabricatorUsers projectMap)
+              tracTickets'
     createPhabricatorTickets pcManiphest phabricatorTickets
     P.close tracConn
     closePhab pc
@@ -65,8 +80,9 @@ describeTicket ticket = T.unpack $
     where textLength = T.pack . show . length
 
 
-tracTicketToPhabricatorTicket :: [PhabricatorUser] -> TracTicket -> ManiphestTicket
-tracTicketToPhabricatorTicket users ticket =
+tracTicketToPhabricatorTicket :: [PhabricatorUser] -> [PhabricatorProject]
+                              -> TracTicket -> ManiphestTicket
+tracTicketToPhabricatorTicket users projects ticket =
     ManiphestTicket
         { m_tracn = t_id ticket
         , m_title = t_summary ticket
@@ -78,7 +94,7 @@ tracTicketToPhabricatorTicket users ticket =
         , m_modified = t_changetime ticket
         , m_phid = Nothing
         , m_status = t_status ticket
-        , m_changes = map (tracChangeToPhabChange users) (t_comments ticket)
+        , m_changes = map (tracChangeToPhabChange users projects) (t_comments ticket)
         , m_cc = mapMaybe lookupCC (t_cc ticket)
         }
     where findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
@@ -88,8 +104,9 @@ tracTicketToPhabricatorTicket users ticket =
 -- I don't have mails to check now
 lookupByEmail = const Nothing
 
-tracChangeToPhabChange :: [PhabricatorUser] -> TracTicketChange -> ManiphestChange
-tracChangeToPhabChange users TracTicketChange{..}
+tracChangeToPhabChange :: [PhabricatorUser] -> [PhabricatorProject]
+                       -> TracTicketChange -> ManiphestChange
+tracChangeToPhabChange users projects TracTicketChange{..}
   = ManiphestChange
       { mc_type    = trace (take 50 $ show (getType ch_field)) (getType ch_field)
       , mc_created = ch_time
@@ -105,11 +122,11 @@ tracChangeToPhabChange users TracTicketChange{..}
         "blockedby" -> MCBlockedBy []
 --        "blocking"  -> MCBlocking []
         "component" -> m MCComponent
-        "description" -> m MCDescription
+        "description" -> MCDescription (convert $ fromMaybe "" ch_newvalue)
         "differential" -> MCDifferential []
         "difficulty"   -> m MCDifficulty
         "failure"      -> m MCFailure
-        "keywords"     -> MCKeywords []
+        "keywords"     -> maybe Dummy (MCKeywords . convertKeywords) ch_newvalue
         "milestone"    -> m MCMilestone
         "os"           -> m MCOS
         "owner"        -> maybe Dummy MCOwner (findUser <$> ch_newvalue)
@@ -133,6 +150,9 @@ tracChangeToPhabChange users TracTicketChange{..}
     m con = maybe Dummy con ch_newvalue
     lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
 
+    convertKeywords :: T.Text -> [ProjectID]
+    convertKeywords t = mapMaybe (lookupPhabricatorProjectPHID projects) (parse_cc t)
+
 
 convertPriority :: T.Text -> ManiphestPriority
 convertPriority priority =
@@ -148,3 +168,10 @@ convertPriority priority =
 lookupPhabricatorUserPHID :: [PhabricatorUser] -> T.Text -> Maybe UserID
 lookupPhabricatorUserPHID users username  =
     u_phid <$> find (\x -> u_userName x == username) users
+
+lookupPhabricatorProjectPHID :: [PhabricatorProject] -> T.Text -> Maybe ProjectID
+lookupPhabricatorProjectPHID _ "" = Nothing
+lookupPhabricatorProjectPHID projects project  =
+    p_phid <$> find (\x -> p_projectName x == project) projects
+
+
