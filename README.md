@@ -16,9 +16,9 @@
  - [X] Copy custom field data across to Phabricator
  - [ ] Copy attachments across to Phabricator
  - [ ] Alert when target user does not exist
- - [ ] Merge together the closely related "resolution" and "status"
+ - [X] Merge together the closely related "resolution" and "status"
  - [ ] Add all edge information in by mastertickets table
- - [ ] Decide whether to have a special closed status as default
+ - [X] Decide whether to have a special closed status as default
 
 
 Parser
