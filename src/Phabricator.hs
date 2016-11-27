@@ -9,7 +9,7 @@
 
 module Phabricator where
 
-import GHC.Generics
+import GHC.Generics (Generic)
 import Data.Int
 import Data.Maybe (mapMaybe)
 import Data.Either (lefts, rights)
@@ -22,7 +22,7 @@ import Data.Time.Clock (DiffTime, diffTimeToPicoseconds)
 import Data.Text.Encoding (decodeUtf8)
 import System.IO.Streams.List (toList)
 import Database.MySQL.Base
-import Network.Conduit.Client
+import Network.Conduit.Client hiding (User)
 import Control.Monad
 import Trac
 import Debug.Trace
@@ -30,8 +30,21 @@ import Config
 import Types
 
 import qualified Trac.Convert as T
+import qualified Database.MySQL.Base as M
 
+data PhabricatorConnection
+  = PC { pcManiphest :: C 'Ticket , pcUser :: C 'User }
 
+connectPhab :: IO PhabricatorConnection
+connectPhab = do
+  cm <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" }
+  cu <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_user" }
+  return (PC cm cu)
+
+closePhab :: PhabricatorConnection -> IO ()
+closePhab (PC (C c1) (C c2)) = M.close c1 >> M.close c2
+
+newtype C a = C { getConn :: M.MySQLConn }
 
 data APIPHID = APIPHID
     { api_phid :: TicketID
@@ -116,25 +129,23 @@ mysqlToUsers :: [[MySQLValue]] -> [PhabricatorUser]
 mysqlToUsers = mapMaybe mysqlToUser
 
 
-getPhabricatorUsers :: IO [PhabricatorUser]
-getPhabricatorUsers = do
-    conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_user" })
+getPhabricatorUsers :: C 'User -> IO [PhabricatorUser]
+getPhabricatorUsers (C conn) = do
     (_, rawUsersStream) <- query_ conn "SELECT phid, userName FROM user"
     rawUsers <- toList rawUsersStream
-    close conn
     let users = mysqlToUsers rawUsers
     return users
 
 
-createPhabricatorTickets :: [ManiphestTicket] -> IO ()
-createPhabricatorTickets tickets =
-    mapM_ createPhabricatorTicket tickets
+createPhabricatorTickets :: C 'Ticket -> [ManiphestTicket] -> IO ()
+createPhabricatorTickets conn tickets =
+    mapM_ (createPhabricatorTicket conn) tickets
 
 
 badTickets = [8539]
 
-createPhabricatorTicket :: ManiphestTicket -> IO (Either Text ())
-createPhabricatorTicket ticket = do
+createPhabricatorTicket :: C 'Ticket -> ManiphestTicket -> IO (Either Text ())
+createPhabricatorTicket conn ticket = do
     traceShowM (T.concat [T.pack (show $ m_tracn ticket),": ", m_title ticket])
     if m_tracn ticket `elem` badTickets
       then return (Left "BadTicket")
@@ -142,9 +153,9 @@ createPhabricatorTicket ticket = do
         response <- callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs ticket)
         case response of
             ConduitResult phidResponse -> do
-              res <- doTransactions (api_phid phidResponse) ticket
+              res <- doTransactions conn (api_phid phidResponse) ticket
             -- Make sure to do this last
-              updatePhabricatorTicket (ticket {m_phid = Just (api_phid phidResponse)})
+              updatePhabricatorTicket conn (ticket {m_phid = Just (api_phid phidResponse)})
               return (Right ())
             ConduitError code info -> do
               traceShowM (m_title ticket, code, info)
@@ -198,16 +209,16 @@ ticketToConduitPairs ticket =
 --    , "projectPHIDs" .= []  -- ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
     ]
 
-doTransactions :: TicketID -> ManiphestTicket -> IO ()
-doTransactions tid mt = do
+doTransactions :: C 'Ticket -> TicketID -> ManiphestTicket -> IO ()
+doTransactions conn tid mt = do
   let cs = m_changes mt
-  mapM_ (doOneTransaction tid) cs
+  mapM_ (doOneTransaction conn tid) cs
 
 -- We have to do each one individually with 10000s of API calls to make
 -- sure we get exactly 0 or 1 transactions for each update so we can match
 -- the author and time information correctly.
-doOneTransaction :: TicketID -> ManiphestChange -> IO ()
-doOneTransaction tid mc = do
+doOneTransaction :: C 'Ticket -> TicketID -> ManiphestChange -> IO ()
+doOneTransaction conn tid mc = do
   case buildTransaction mc of
     Nothing -> return ()
     Just v  -> do
@@ -223,9 +234,9 @@ doOneTransaction tid mc = do
       traceShowM ts
       case ts of
         -- Uncomment to debug
-        ts -> mapM_ (fixTransactionInformation (mc_authorId mc) (mc_created mc)) ts
+        ts -> mapM_ (fixTransactionInformation conn (mc_authorId mc) (mc_created mc)) ts
         -- Exactly one, do the transaction update
-        [t] -> fixTransactionInformation (mc_authorId mc) (mc_created mc) t
+        [t] -> fixTransactionInformation conn (mc_authorId mc) (mc_created mc) t
         -- Zero, the edit had no effect
         []  -> return ()
         -- More than one, bad, better to abort
@@ -248,19 +259,18 @@ transactionParser o = do
 -- Need to go into two tables,  phabricator_manifest_transaction and
 -- phabricator_manifest_comment
 fixTransactionInformation ::
-                         UserID
+                         C 'Ticket
+                      -> UserID
                       -> DiffTime
                       -> TransactionID
                       -> IO ()
-fixTransactionInformation (PHID maid) date (PHID tid) =
+fixTransactionInformation (C conn) (PHID maid) date (PHID tid) =
   let fix1 = "UPDATE maniphest_transaction SET dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?"
       fix2 = "UPDATE maniphest_transaction_comment SET authorPHID=? WHERE transactionPHID=?"
       values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText maid, MySQLText tid]
       values2 = [values1 !! 2, values1 !! 3]
-  in do
-    conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
+  in
     void $ execute conn fix1 values1 >> execute conn fix2 values2
-    close conn
 
 
 
@@ -276,9 +286,8 @@ priorityToInteger p =
         Wishlist -> 0
 
 
-updatePhabricatorTicket :: ManiphestTicket -> IO ()
-updatePhabricatorTicket ticket = do
-    conn <- connect (phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" })
+updatePhabricatorTicket :: C 'Ticket -> ManiphestTicket -> IO ()
+updatePhabricatorTicket (C conn) ticket = do
     let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, status=?, authorPHID=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
         q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=? AND transactionType='status'"
@@ -296,7 +305,6 @@ updatePhabricatorTicket ticket = do
                          return ()
 
       Nothing -> return ()
-    close conn
 
 
 ticketToUpdateTuple :: ManiphestTicket -> Maybe [MySQLValue]

@@ -24,17 +24,24 @@ import Data.List
 import Data.Ord
 import Control.Applicative
 
+import qualified Database.MySQL.Base as M
+import qualified Database.PostgreSQL.Simple as P
+
 data WorkDescription = Exact Int | UpTo Bool Int | All
 
 migrate :: WorkDescription -> IO ()
 migrate workDesc = do
-    phabricatorUsers <- getPhabricatorUsers
+    tracConn <- P.connect tracConnectInfo
+    pc@PC{..} <- connectPhab
+    phabricatorUsers <- getPhabricatorUsers pcUser
     traceShowM ("phabUsers", length phabricatorUsers)
-    tracTickets <- getTracTickets
+    tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
     let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
     let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
-    createPhabricatorTickets phabricatorTickets
+    createPhabricatorTickets pcManiphest phabricatorTickets
+    P.close tracConn
+    closePhab pc
     putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
 
 

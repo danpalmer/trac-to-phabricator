@@ -210,12 +210,9 @@ getComments TracTicketChange{..} =
     then maybe False (not . T.null) ch_newvalue
     else True
 
-
-getTracTickets :: IO [TracTicket]
-getTracTickets = do
-    conn <- connect tracConnectInfo
+getTracTickets :: Connection -> IO [TracTicket]
+getTracTickets conn = do
     rawTickets <- query_ conn "SELECT * FROM ticket"
     customFields <- query_ conn "SELECT * FROM ticket_custom ORDER BY ticket"
     ticketUpdates <- query_ conn "SELECT * FROM ticket_change ORDER BY ticket"
-    close conn
     return $ mergeTracData rawTickets customFields ticketUpdates
