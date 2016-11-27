@@ -31,14 +31,12 @@
   "wontfix": {
     "name": "Wontfix",
     "closed": true,
-    "special": "closed",
     "claim": false
     },
 
   "worksforme": {
     "name": "Worksforme",
     "closed": true,
-    "special": "closed",
     "claim": false
     }
 }
