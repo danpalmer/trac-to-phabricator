@@ -96,6 +96,7 @@ data MCType = MCComment Text
             | Dummy deriving Show
 
 
+
 mysqlToUser :: [MySQLValue] -> Maybe PhabricatorUser
 mysqlToUser values =
     case values of
@@ -158,7 +159,7 @@ buildTransaction = doOne
         MCComment c -> Just $ mkTransaction "comment" c
         MCCC cs -> Just $ mkTransaction "subscribers.set" cs
         MCArchitecture v -> Just $ mkTransaction "custom.ghc:architecture" v
-        MCBlockedBy bs   -> Just $ mkTransaction "parent" bs
+        MCBlockedBy bs   -> Nothing --Just $ mkTransaction "parent" bs
         MCComponent c    -> Just $ mkTransaction "custom.ghc:failure" c
         MCDescription d  -> Just $ mkTransaction "description" d
         MCDifferential d -> Nothing --Just $ mkTransaction "" -- Add edge
@@ -222,7 +223,7 @@ doOneTransaction tid mc = do
       traceShowM ts
       case ts of
         -- Uncomment to debug
-        -- ts -> mapM_ (fixTransactionInformation (mc_authorId mc) (mc_created mc)) ts
+        ts -> mapM_ (fixTransactionInformation (mc_authorId mc) (mc_created mc)) ts
         -- Exactly one, do the transaction update
         [t] -> fixTransactionInformation (mc_authorId mc) (mc_created mc) t
         -- Zero, the edit had no effect

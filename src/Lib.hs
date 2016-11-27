@@ -2,12 +2,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 
 module Lib
     ( migrate
     , describeTicket
-    , WorkDescription(..)
+    , WorkDescription(.., DownTo)
     ) where
 
 import qualified Data.Text as T
@@ -23,7 +24,7 @@ import Data.List
 import Data.Ord
 import Control.Applicative
 
-data WorkDescription = Exact Int | UpTo Int | All
+data WorkDescription = Exact Int | UpTo Bool Int | All
 
 migrate :: WorkDescription -> IO ()
 migrate workDesc = do
@@ -37,9 +38,12 @@ migrate workDesc = do
     putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
 
 
+pattern DownTo n = UpTo True n
+
+
 getTickets :: WorkDescription -> [TracTicket] -> [TracTicket]
 getTickets (Exact n) ts = maybe [] (:[])  (find ((== n) . t_id) ts)
-getTickets (UpTo n) ts  = take n ts
+getTickets (UpTo rev n) ts  = take n (if rev then reverse ts else ts)
 getTickets All ts = ts
 
 
@@ -80,7 +84,7 @@ lookupByEmail = const Nothing
 tracChangeToPhabChange :: [PhabricatorUser] -> TracTicketChange -> ManiphestChange
 tracChangeToPhabChange users TracTicketChange{..}
   = ManiphestChange
-      { mc_type    = traceShowId (getType ch_field)
+      { mc_type    = trace (take 50 $ show (getType ch_field)) (getType ch_field)
       , mc_created = ch_time
       , mc_authorId = findUser ch_author }
   where
@@ -115,6 +119,9 @@ tracChangeToPhabChange users TracTicketChange{..}
         "version"      -> m MCVersion
         "wikipage"     -> m MCWiki
         _         -> Dummy
+        -- Note there are lots of entries like _comment1 which correspond
+        -- to comment updates. However, the value in comment is the actual
+        -- final comment and we don't both to maintain this much fidelity.
 
     m con = maybe Dummy con ch_newvalue
     lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
