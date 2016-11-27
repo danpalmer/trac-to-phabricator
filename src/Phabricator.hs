@@ -97,6 +97,8 @@ data MCType = MCComment Text
             | MCDifficulty Text
             | MCFailure Text
             | MCKeywords [ProjectID]
+            | MCAddKeyword ProjectID
+            | MCRemoveKeyword ProjectID
             | MCMilestone Text
             | MCOS Text
             | MCOwner UserID
@@ -112,7 +114,7 @@ data MCType = MCComment Text
             | MCType Text
             | MCVersion Text
             | MCWiki Text
-            | Dummy deriving Show
+            | Dummy Text deriving Show
 
 
 
@@ -221,7 +223,10 @@ buildTransaction = doOne
         MCType t         -> Just $ mkTransaction "custom.ghc:type" t
         MCVersion v      -> Just $ mkTransaction "custom.ghc:version" v
         MCWiki w         -> Nothing -- TO implement this field
-        Dummy -> Nothing
+        -- We try to remove the old one and add the new one.
+        MCAddKeyword new -> Just $ mkTransaction    "projects.add"    [new]
+        MCRemoveKeyword old -> Just $ mkTransaction "projects.remove" [old]
+        Dummy diag -> Nothing
 
 mkTransaction :: ToJSON a => Text -> a -> Value
 mkTransaction ty val = object [ "type" .= ty
@@ -347,19 +352,45 @@ ticketToUpdateTuple ticket =
             ]
         Nothing -> Nothing
 
-createProject :: Text -> IO ProjectID
-createProject t = do
-  response <- callConduitPairs conduit "project.create" ["name" .= t
+deleteProjectInfo :: C 'Project -> IO ()
+deleteProjectInfo (C conn) = void $  do
+  execute_ conn "DELETE FROM project"
+  execute_ conn "DELETE FROM project_transaction"
+  execute_ conn "DELETE FROM project_column"
+  execute_ conn "DELETE FROM project_columnposition"
+  execute_ conn "DELETE FROM project_columntransaction"
+  execute_ conn "DELETE FROM project_transaction"
+  execute_ conn "DELETE FROM edge"
+  execute_ conn "DELETE FROM project_slug"
+
+deleteTicketInfo :: C 'Ticket -> IO ()
+deleteTicketInfo (C conn) = void $ do
+  execute_ conn "DELETE FROM maniphest_task"
+  execute_ conn "DELETE FROM maniphest_transaction"
+  execute_ conn "DELETE FROM edge"
+
+createProject :: (KeywordType, Text) -> IO (Maybe ProjectID)
+createProject (_,"") = return Nothing
+createProject i@(ty,kw) = do
+  response <- callConduitPairs conduit "project.create" ["name" .= kw
+                                                        ,"icon" .= keywordTypeToIcon ty
                                                         -- The API call
                                                         -- fails if you
                                                         -- don't pass this
                                                         -- param
                                                         , "members" .= ([] :: [()])]
-  traceShowM (response :: ConduitResponse (APIPHID 'Project))
+  traceShowM (i, (response :: ConduitResponse (APIPHID 'Project)))
   case response of
-    ConduitResult (APIPHID a) -> return a
-    ConduitError {} -> error (show response)
+    ConduitResult (APIPHID a) -> return (Just a)
+    ConduitError {} -> do
+      traceShowM response
+      return Nothing
 
+keywordTypeToIcon :: KeywordType -> Text
+keywordTypeToIcon t =
+  case t of
+    Milestone -> "release"
+    _ -> "project"
 
 convertTime :: DiffTime -> Int64
 convertTime t = fromIntegral $ diffTimeToPicoseconds t `div` 1000000

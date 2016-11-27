@@ -23,3 +23,5 @@ type ProjectID     = PHID 'Project
 
 unwrapPHID :: PHID a -> Text
 unwrapPHID (PHID t) = t
+
+data KeywordType = Arch | Keyword | OS | Milestone | Component | Type  deriving Show

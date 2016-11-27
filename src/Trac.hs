@@ -20,6 +20,7 @@ import Data.List
 import qualified Data.IntMap as M
 import qualified Data.Set as S
 import Debug.Trace
+import Types
 
 data TracTicket = TracTicket
     { t_id :: Int
@@ -226,13 +227,24 @@ getTracUsers conn = do
   map fromOnly <$> query_ conn "SELECT DISTINCT author FROM ticket_change"
 
 
-data KeywordType = Keyword deriving Show
-
 -- This is for keywords and also custom more structured fields
 getProjectWords :: Connection -> IO [(KeywordType, Text)]
 getProjectWords conn = do
-  tags <- processKeywords . mapMaybe fromOnly <$> query_ conn "SELECT keywords FROM ticket"
-  return (map (Keyword,) tags)
+  tags <- map (Keyword,) . processKeywords . mapMaybe fromOnly <$> query_ conn "SELECT keywords FROM ticket"
+  os <- map (OS,) . delete "Other" . removeDefault "Unknown/Multiple" . map fromOnly
+            <$> query_ conn "SELECT DISTINCT value FROM ticket_custom WHERE name='os'"
+  archs <- map (Arch,) . delete "Other" . removeDefault "Unknown/Multiple" . map fromOnly
+            <$> query_ conn "SELECT DISTINCT value FROM ticket_custom WHERE name='architecture'"
+  milestone <- map (Milestone,) . delete "None" . map fromOnly <$> query_ conn "SELECT name FROM milestone"
+  component <- map (Component,) . removeDefault "Compiler" . map fromOnly <$> query_ conn "SELECT name FROM component"
+  let types = map (Type,) ["Task", "Feature Request", "Bug"]
+  return $ (tags ++ os ++ archs ++ milestone ++ component ++ types)
+
+removeDefault = delete
+
+-- Remove spaces and other bad characters
+normaliseToProjectName :: Text -> Text
+normaliseToProjectName t = T.replace " " "-" t
 
 -- We only pick keywords with at least 10 tickets, seems like a good time
 -- for a cleanup!

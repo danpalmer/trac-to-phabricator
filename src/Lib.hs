@@ -94,7 +94,7 @@ tracTicketToPhabricatorTicket users projects ticket =
         , m_modified = t_changetime ticket
         , m_phid = Nothing
         , m_status = t_status ticket
-        , m_changes = map (tracChangeToPhabChange users projects) (t_comments ticket)
+        , m_changes = concatMap (tracChangeToPhabChange users projects) (t_comments ticket)
         , m_cc = mapMaybe lookupCC (t_cc ticket)
         }
     where findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
@@ -105,51 +105,60 @@ tracTicketToPhabricatorTicket users projects ticket =
 lookupByEmail = const Nothing
 
 tracChangeToPhabChange :: [PhabricatorUser] -> [PhabricatorProject]
-                       -> TracTicketChange -> ManiphestChange
+                       -> TracTicketChange -> [ManiphestChange]
 tracChangeToPhabChange users projects TracTicketChange{..}
-  = ManiphestChange
-      { mc_type    = trace (take 50 $ show (getType ch_field)) (getType ch_field)
-      , mc_created = ch_time
-      , mc_authorId = findUser ch_author }
+  = map (\t -> ManiphestChange
+                { mc_type    = trace (take 50 $ show t) t
+                , mc_created = ch_time
+                , mc_authorId = findUser ch_author }) (getType ch_field)
   where
     findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
-    getType :: T.Text -> MCType
+    getType :: T.Text -> [MCType]
     getType t =
       case t of
-        "comment" -> MCComment (convert $ fromMaybe "" ch_newvalue)
-        "cc"      -> MCCC (maybe [] (\v -> mapMaybe lookupCC (parse_cc v)) ch_newvalue)
-        "architecture" -> maybe Dummy MCArchitecture ch_newvalue
-        "blockedby" -> MCBlockedBy []
+        "comment" -> [MCComment (convert $ fromMaybe "" ch_newvalue)]
+        "cc"      -> [MCCC (maybe [] (\v -> mapMaybe lookupCC (parse_cc v)) ch_newvalue)]
+        "architecture" -> addRemoveKeywords --maybe Dummy MCArchitecture ch_newvalue
+        "blockedby" -> [MCBlockedBy []]
 --        "blocking"  -> MCBlocking []
-        "component" -> m MCComponent
-        "description" -> MCDescription (convert $ fromMaybe "" ch_newvalue)
-        "differential" -> MCDifferential []
+        "component" -> addRemoveKeywords --m MCComponent
+        "description" -> [Dummy "MCDesc"] -- [MCDescription (convert $ fromMaybe "" ch_newvalue)]
+        "differential" -> [MCDifferential []]
         "difficulty"   -> m MCDifficulty
-        "failure"      -> m MCFailure
-        "keywords"     -> maybe Dummy (MCKeywords . convertKeywords) ch_newvalue
-        "milestone"    -> m MCMilestone
-        "os"           -> m MCOS
-        "owner"        -> maybe Dummy MCOwner (findUser <$> ch_newvalue)
-        "patch"        -> MCPatch
-        "priority"     -> MCPriority (maybe Normal convertPriority ch_newvalue)
-        "related"      -> MCRelated
-        "reporter"     -> MCReporter
+        "failure"      -> addRemoveKeywords --m MCFailure
+        "keywords"     -> keywords
+        "milestone"    -> addRemoveKeywords -- m MCMilestone
+        "os"           -> addRemoveKeywords --m MCOS
+        "owner"        -> m (MCOwner . findUser)
+        "patch"        -> [MCPatch]
+        "priority"     -> [MCPriority (maybe Normal convertPriority ch_newvalue)]
+        "related"      -> [MCRelated]
+        "reporter"     -> [MCReporter]
         "resolution"   -> m MCResolution
-        "severity"     -> MCSeverity
-        "status"       -> case ch_newvalue of
-                            Nothing -> Dummy
-                            Just v -> if v == "closed" then Dummy else MCStatus v -- A closed ticket always has a resolution
+        "severity"     -> [MCSeverity]
+        "status"       -> [case ch_newvalue of
+                            Nothing -> Dummy "null field"
+                            Just v -> if v == "closed" then Dummy "closed" else MCStatus v] -- "A closed ticket always has a resolution" -- Mao Zedong
         "summary"      -> m MCSummary
-        "testcase"     -> MCTestcase
-        "type"         -> m MCType
+        "testcase"     -> [MCTestcase]
+        "type"         -> addRemoveKeywords --m MCType
         "version"      -> m MCVersion
         "wikipage"     -> m MCWiki
-        _         -> Dummy
+        s         -> [Dummy s]
         -- Note there are lots of entries like _comment1 which correspond
         -- to comment updates. However, the value in comment is the actual
         -- final comment and we don't both to maintain this much fidelity.
+        --
+    -- used by anything which gets mapped to a project
+    keywords = [maybe (Dummy "null field") (MCKeywords . convertKeywords) ch_newvalue]
 
-    m con = maybe Dummy con ch_newvalue
+    addRemoveKeywords = fromMaybe ([Dummy "null field"]) $ do
+      a <- ch_oldvalue
+      b <- ch_newvalue
+      return $ catMaybes [MCRemoveKeyword <$>  lookupPhabricatorProjectPHID projects a
+                         ,MCAddKeyword    <$>  lookupPhabricatorProjectPHID projects b]
+
+    m con = [maybe (Dummy ("null field:")) con ch_newvalue]
 
     lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
 
@@ -175,6 +184,8 @@ lookupPhabricatorUserPHID users username  =
 lookupPhabricatorProjectPHID :: [PhabricatorProject] -> T.Text -> Maybe ProjectID
 lookupPhabricatorProjectPHID _ "" = Nothing
 lookupPhabricatorProjectPHID projects project  =
-    p_phid <$> find (\x -> p_projectName x == project) projects
+  case (p_phid <$> find (\x -> p_projectName x == project) projects) of
+    Just v -> Just v
+    Nothing -> traceShow ("Not Found", project) Nothing
 
 
