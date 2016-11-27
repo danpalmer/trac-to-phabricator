@@ -7,6 +7,7 @@
 module Lib
     ( migrate
     , describeTicket
+    , WorkDescription(..)
     ) where
 
 import qualified Data.Text as T
@@ -22,16 +23,24 @@ import Data.List
 import Data.Ord
 import Control.Applicative
 
-migrate :: Int -> IO ()
-migrate n = do
+data WorkDescription = Exact Int | UpTo Int | All
+
+migrate :: WorkDescription -> IO ()
+migrate workDesc = do
     phabricatorUsers <- getPhabricatorUsers
     traceShowM ("phabUsers", length phabricatorUsers)
     tracTickets <- getTracTickets
     traceShowM ("tickets", length tracTickets)
-    let tracTickets' = take n (sortBy (comparing t_id) tracTickets)
+    let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
     let phabricatorTickets = map (tracTicketToPhabricatorTicket phabricatorUsers) tracTickets'
     createPhabricatorTickets phabricatorTickets
     putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
+
+
+getTickets :: WorkDescription -> [TracTicket] -> [TracTicket]
+getTickets (Exact n) ts = maybe [] (:[])  (find ((== n) . t_id) ts)
+getTickets (UpTo n) ts  = take n ts
+getTickets All ts = ts
 
 
 describeTicket :: TracTicket -> String

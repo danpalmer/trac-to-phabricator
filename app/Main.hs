@@ -3,4 +3,4 @@ module Main where
 import Lib
 
 main :: IO ()
-main = migrate 5
+main = migrate All
