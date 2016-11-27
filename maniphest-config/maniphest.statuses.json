@@ -5,7 +5,8 @@
   "closed": {
     "name": "Closed",
     "closed": true,
-    "special": "closed"
+    "special": "closed",
+    "claim": false
   },
   "merge": {
     "name": "Merge"
@@ -23,6 +24,7 @@
   "duplicate": {
     "name": "Duplicate",
     "special": "duplicate",
-    "closed": true
+    "closed": true,
+    "claim": false
   }
 }
