@@ -2,12 +2,12 @@
   "patch": {
     "name": "Patch"
   },
-  "closed": {
-    "name": "Closed",
+  "fixed": {
+    "name": "Fixed",
     "closed": true,
     "special": "closed",
     "claim": false
-  },
+    },
   "merge": {
     "name": "Merge"
   },
@@ -26,5 +26,19 @@
     "special": "duplicate",
     "closed": true,
     "claim": false
-  }
+  },
+
+  "wontfix": {
+    "name": "Wontfix",
+    "closed": true,
+    "special": "closed",
+    "claim": false
+    },
+
+  "worksforme": {
+    "name": "Worksforme",
+    "closed": true,
+    "special": "closed",
+    "claim": false
+    }
 }

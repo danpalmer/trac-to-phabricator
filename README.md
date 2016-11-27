@@ -9,7 +9,7 @@
  - [X] Copy comment history across to Phabricator
  - [X] Update the comment transaction
  - [ ] Worry about why sorting by creation date doesn't work properly
- - [ ] Implement tags == projects and see what that looks like
+ - [X] Implement tags == projects and see what that looks like
  - [ ] Modify the parser to convert trac links to phab links
  - [X] Fix inefficient comment/ticket pairing
  - [X] Implement other events (cc, assignment, etc)
