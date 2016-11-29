@@ -39,9 +39,9 @@ data TracTicket = TracTicket
     , t_resolution :: Maybe Text
     , t_summary :: Text
     , t_description :: Maybe Text
-    , t_keywords :: Maybe Text
+    , t_keywords :: [Text]
     , t_customFields :: [TracCustomField]
-    , t_comments :: [TracTicketChange]
+    , t_changes :: [TracTicketChange]
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -62,12 +62,14 @@ instance FromRow TracTicket where
         <*> field
         <*> field
         <*> field
-        <*> field
+        <*> (maybe [] parse_cc <$> (field :: RowParser (Maybe Text)))
         <*> pure []
         <*> pure []
 
-parse_cc :: Text -> [Text]
-parse_cc = map T.strip . T.splitOn ","
+parseList :: Text -> [Text]
+parseList = map T.strip . T.splitOn ","
+
+parse_cc = parseList
 
 data TracCustomField = TracCustomField
     { cf_name :: Text
@@ -198,7 +200,7 @@ mergeTicketsAndComments tickets changes = map merge tickets
         changes' = filter getComments changes
         bucket :: IntMap (DList TracTicketChange)
         bucket = M.fromAscListWith concatD [(ch_ticket x, singletonD x) | x <- changes']
-        merge ticket = ticket {t_comments = ticketComments ticket}
+        merge ticket = ticket {t_changes = ticketComments ticket}
         ticketComments ticket =
           sortBy (comparing ch_time)
            $ M.findWithDefault id (t_id ticket) bucket []
@@ -218,7 +220,57 @@ getTracTickets conn = do
     rawTickets <- query_ conn "SELECT * FROM ticket"
     customFields <- query_ conn "SELECT * FROM ticket_custom ORDER BY ticket"
     ticketUpdates <- query_ conn "SELECT * FROM ticket_change ORDER BY ticket"
-    return $ mergeTracData rawTickets customFields ticketUpdates
+    return $
+        map (normalise . recoverOriginalTracTicket) $
+          mergeTracData rawTickets customFields ticketUpdates
+
+-- We want to recover the original state of the ticket.
+recoverOriginalTracTicket :: TracTicket -> TracTicket
+recoverOriginalTracTicket TracTicket{..} =
+  TracTicket
+    { t_id = t_id
+    , t_type = recover "type" t_changes t_type
+    , t_time = t_time
+    , t_changetime = t_changetime
+    , t_component = recover "component" t_changes t_component
+    , t_severity = recover "severity" t_changes <$> t_severity
+    , t_priority = recover "priority" t_changes t_priority
+    , t_owner = recoverG "owner" t_changes id t_owner
+    , t_reporter = t_reporter
+    , t_cc = recoverG "cc" t_changes n t_cc
+    , t_version = recoverG "version" t_changes id t_version
+    , t_milestone = recoverG "milestone" t_changes id t_milestone
+    , t_status = recover "status" t_changes t_status
+    , t_resolution = recoverG "resolution" t_changes id t_resolution
+    , t_summary = t_summary
+    , t_description = t_description
+    , t_keywords = recoverG "keywords" t_changes n t_keywords
+    , t_customFields = t_customFields
+    , t_changes = t_changes }
+  where
+    recoverG :: Text -> [TracTicketChange] -> (Maybe Text -> a) -> a -> a
+    recoverG field cs f def = maybe def f (ch_oldvalue <$> find ((==field) . ch_field) cs)
+
+    recover :: Text -> [TracTicketChange] -> Text -> Text
+    recover field cs def = recoverG field cs fromJust def
+
+    n :: Maybe Text -> [Text]
+    n = maybe [] parse_cc
+
+normalise :: TracTicket -> TracTicket
+normalise t = t { t_cc = filter (not . T.null) (t_cc t)
+                , t_keywords = filter (not . T.null) (t_keywords t)
+                , t_milestone = flatten t_milestone
+                , t_owner = flatten t_owner
+                , t_resolution = flatten t_resolution }
+  where
+    flatten f = case f t of
+                  Just "" -> Nothing
+                  v -> v
+
+
+
+
 
 type TracUser = Text
 
@@ -226,25 +278,35 @@ getTracUsers :: Connection -> IO [Text]
 getTracUsers conn = do
   map fromOnly <$> query_ conn "SELECT DISTINCT author FROM ticket_change"
 
+data Projects = Projects
+              { keywords :: [Text] -- Make these into projects
+              , oses :: [Text]     -- These into subprojects
+              , arch :: [Text]
+              , milestones :: [Text] -- Milestones of "GHC"
+              , comp :: [Text]
+              , types :: [Text] } -- Projects }
+
 
 -- This is for keywords and also custom more structured fields
-getProjectWords :: Connection -> IO [(KeywordType, Text)]
+getProjectWords :: Connection -> IO Projects
 getProjectWords conn = do
-  tags <- map (Keyword,) . processKeywords . mapMaybe fromOnly <$> query_ conn "SELECT keywords FROM ticket"
-  os <- map (OS,) . delete "Other" . removeDefault "Unknown/Multiple" . map fromOnly
+  tags <- processKeywords . mapMaybe fromOnly <$> query_ conn "SELECT keywords FROM ticket"
+  os <- delete "Other" . removeDefault "Unknown/Multiple" . map fromOnly
             <$> query_ conn "SELECT DISTINCT value FROM ticket_custom WHERE name='os'"
-  archs <- map (Arch,) . delete "Other" . removeDefault "Unknown/Multiple" . map fromOnly
+  archs <- delete "Other" . removeDefault "Unknown/Multiple" . map fromOnly
             <$> query_ conn "SELECT DISTINCT value FROM ticket_custom WHERE name='architecture'"
-  milestone <- map (Milestone,) . delete "None" . map fromOnly <$> query_ conn "SELECT name FROM milestone"
-  component <- map (Component,) . removeDefault "Compiler" . map fromOnly <$> query_ conn "SELECT name FROM component"
-  let types = map (Type,) ["Task", "Feature Request", "Bug"]
-  return $ (tags ++ os ++ archs ++ milestone ++ component ++ types)
+  milestone <- delete "None" . map fromOnly <$> query_ conn "SELECT name FROM milestone"
+  component <- removeDefault "Compiler" . map fromOnly <$> query_ conn "SELECT name FROM component"
+  let types = ["task", "feature request", "bug"]
+  return $ Projects tags os archs milestone component types
 
 removeDefault = delete
 
 -- Remove spaces and other bad characters
 normaliseToProjectName :: Text -> Text
 normaliseToProjectName t = T.replace " " "-" t
+
+
 
 -- We only pick keywords with at least 10 tickets, seems like a good time
 -- for a cleanup!

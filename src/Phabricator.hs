@@ -64,7 +64,7 @@ data PhabricatorUser = PhabricatorUser
 data PhabricatorProject = PhabricatorProject
     { p_phid        :: ProjectID
     , p_projectName :: Text
-    }
+    } deriving Show
 
 data ManiphestTicket = ManiphestTicket
     { m_tracn :: Int
@@ -78,6 +78,7 @@ data ManiphestTicket = ManiphestTicket
     , m_modified :: DiffTime
     , m_phid :: Maybe TicketID
     , m_status :: Text
+    , m_projects :: [ProjectID] -- Milestone, keywords, type,
     , m_changes :: [ManiphestChange]
     } deriving (Show)
 
@@ -184,9 +185,10 @@ createPhabricatorTicket conn ticket = do
         response <- callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs ticket)
         case response of
             ConduitResult phidResponse -> do
-              res <- doTransactions conn (api_phid phidResponse) ticket
-            -- Make sure to do this last
               updatePhabricatorTicket conn (ticket {m_phid = Just (api_phid phidResponse)})
+              res <- doTransactions conn (api_phid phidResponse) ticket
+              fixSubscribers conn (ticket {m_phid = Just (api_phid phidResponse)})
+            -- Make sure to do this last
               return (Right ())
             ConduitError code info -> do
               traceShowM (m_title ticket, code, info)
@@ -237,10 +239,10 @@ ticketToConduitPairs :: ManiphestTicket -> [J.Pair]
 ticketToConduitPairs ticket =
     [ "title" .= m_title ticket
     , "description"  .= m_description ticket
---    , "ownerPHID" .= m_ownerPHID ticket
+    , "ownerPHID" .= m_ownerPHID ticket
     , "priority" .= priorityToInteger (m_priority ticket)
---    , "ccPHIDs" .= m_cc ticket
---    , "projectPHIDs" .= []  -- ["PHID-PROJ-qo3k34ztcwlndlg7pzkb" :: Text]
+    , "ccPHIDs" .= m_cc ticket
+    , "projectPHIDs" .= m_projects ticket
     ]
 
 doTransactions :: C 'Ticket -> TicketID -> ManiphestTicket -> IO ()
@@ -324,18 +326,29 @@ updatePhabricatorTicket :: C 'Ticket -> ManiphestTicket -> IO ()
 updatePhabricatorTicket (C conn) ticket = do
     let q = "UPDATE maniphest_task SET id=?, dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
-        q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=? AND transactionType='status'"
-        -- A subscriber is automatically added
-        -- This is where the notification a subscriber is added is
-        -- populated from
-        q3 = "DELETE FROM maniphest_transaction WHERE transactionType=? AND objectPHID=?"
-        -- This is where the subscribers info is populated from
-        q4 = "DELETE FROM edge WHERE src=?"
+        q2 = "UPDATE maniphest_transaction SET dateCreated=?, authorPHID=? WHERE objectPHID=?"
     case ticketToUpdateTuple ticket of
       Just values -> do  execute conn q values
-                         execute conn q2 [values !! 1 , values !! 4]
-        --                 execute conn q3 [MySQLText "core:subscribers", values !! 3]
-        --                 execute conn q4 [values !! 3]
+                         execute conn q2 [values !! 1 , values !! 3, values !! 4]
+                         return ()
+
+      Nothing -> return ()
+
+fixSubscribers :: C 'Ticket -> ManiphestTicket -> IO ()
+fixSubscribers (C conn) ticket = do
+        -- A subscriber is automatically added
+        -- This is where the notification a subscriber is added is
+        -- populated from. We have to be careful to just remove the bot
+        -- user ID. Doing any action with the API adds you as a subscriber
+        -- so you should remove the edges at the END as well.
+  let   q3 = "DELETE FROM maniphest_transaction WHERE transactionType=? AND objectPHID=? AND newValue like '%cv4luanhibq47r6o2zrb%' "
+        -- This is where the subscribers info is populated from
+        q4 = "DELETE FROM edge WHERE dst=?"
+  case ticketToUpdateTuple ticket of
+      Just values -> do  execute conn q3 [MySQLText "core:subscribers"
+                                         , values !! 4
+                                         ]
+                         execute conn q4 [MySQLText $ unwrapPHID botUser]
                          return ()
 
       Nothing -> return ()
@@ -370,11 +383,12 @@ deleteTicketInfo (C conn) = void $ do
   execute_ conn "DELETE FROM maniphest_transaction"
   execute_ conn "DELETE FROM edge"
 
-createProject :: (KeywordType, Text) -> IO (Maybe ProjectID)
-createProject (_,"") = return Nothing
-createProject i@(ty,kw) = do
+createProject :: Text -> IO (Maybe ProjectID)
+createProject "" = return Nothing
+createProject i@kw = do
   response <- callConduitPairs conduit "project.create" ["name" .= kw
-                                                        ,"icon" .= keywordTypeToIcon ty
+                    --                                    ,"icon" .= keywordTypeToIcon ty
+                      --                                  ,"colour" .= keywordTypeToColour ty
                                                         -- The API call
                                                         -- fails if you
                                                         -- don't pass this
@@ -392,6 +406,24 @@ keywordTypeToIcon t =
   case t of
     Milestone -> "release"
     _ -> "project"
+
+keywordTypeToColour :: KeywordType -> Text
+keywordTypeToColour t = "red"
+
+data SubOrMil = Sub | Mil
+
+addSubproject :: ProjectID -> SubOrMil -> Text ->  IO ()
+addSubproject phid sorm name = do
+  (response :: ConduitResponse Value) <- callConduitPairs conduit "project.edit"
+                [ "transactions" .= [mkTransaction (tt sorm) phid
+                                    , mkTransaction "name" name ]
+                ]
+  traceShowM response
+  return ()
+  where
+    tt Sub = "parent"
+    tt Mil = "milestone"
+
 
 convertTime :: DiffTime -> Int64
 convertTime t = fromIntegral $ diffTimeToPicoseconds t `div` 1000000

@@ -12,11 +12,12 @@ data ConduitConfig =
 
 -- The ID of the user doing the migration
 botUser :: UserID
-botUser = PHID "PHID-USER-r77ofkse6266v7ngjzlk"
+botUser = PHID "PHID-USER-cv4luanhibq47r6o2zrb"
 
 
 conduitConfig :: ConduitConfig
-conduitConfig = ConduitConfig (ConduitAPITokenAuth "api-rltdytuu6tek4yspds6wshfslw3r")
+--conduitConfig = ConduitConfig (ConduitAPITokenAuth "api-rltdytuu6tek4yspds6wshfslw3r")
+conduitConfig = ConduitConfig (ConduitAPITokenAuth "api-obtum5xnbtckzkhg2v3xw63rdneb")
 
 phabConnectInfo :: M.ConnectInfo
 phabConnectInfo =

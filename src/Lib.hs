@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE DataKinds #-}
 
 
 module Lib
@@ -40,24 +41,56 @@ migrate workDesc = do
     traceShowM ("phabUsers", length phabricatorUsers)
     traceShowM ("tracUsers", length tracUsers)
 
-    -- Projects
-    kws <- getProjectWords tracConn
---    mapM_ (createProject . snd) kws
-    projectMap <- getPhabricatorProjects pcProject
-
-    traceShowM ("words", length $ projectMap)
+    projectMap <- getProjectMap tracConn pcProject
+    traceShowM ("words", projectMap)
 
     deleteTicketInfo pcManiphest
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
     let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
+    let good = t_id <$> filter (not . null . t_cc) tracTickets'
+    traceShowM good
+    traceShowM tracTickets'
+--    traceShowM tracTickets'
     let phabricatorTickets
           = map (tracTicketToPhabricatorTicket phabricatorUsers projectMap)
               tracTickets'
+    traceShowM phabricatorTickets
     createPhabricatorTickets pcManiphest phabricatorTickets
+
     P.close tracConn
     closePhab pc
-    putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
+--    putStrLn $ "Migrated " ++ show (length tracTickets') ++ " tickets."
+
+
+getProjectMap :: P.Connection -> C 'Project -> IO ProjectMap
+getProjectMap tracConn pcProject = do
+    --deleteProjectInfo pcProject
+    -- Projects
+    {-
+    Projects {..} <- getProjectWords tracConn
+
+    createProjectHierarchy "GHC" Mil milestones
+    createProjectHierarchy "Component" Sub comp
+    createProjectHierarchy "OS" Sub oses
+    createProjectHierarchy "Architecture" Sub arch
+
+    -- Make tags for keywords
+    mapM_ createProject keywords
+    mapM_ createProject types
+    -}
+    --mapM_ createProject keywords
+    getPhabricatorProjects pcProject
+
+
+createProjectHierarchy :: T.Text -> SubOrMil -> [T.Text] -> IO ()
+createProjectHierarchy parent sorm children = do
+  Just newProj <- createProject parent
+  mapM_ (addSubproject newProj sorm) children
+
+
+type ProjectMap = [PhabricatorProject]
+type UserMap    = [PhabricatorUser]
 
 
 pattern DownTo n = UpTo True n
@@ -74,7 +107,7 @@ describeTicket ticket = T.unpack $
     T.concat [
         t_summary ticket,
             "\n\tFields: ", textLength $ t_customFields ticket,
-            "\n\tComments:", textLength $ t_comments ticket,
+            "\n\tComments:", textLength $ t_changes ticket,
             "\n\n"
     ]
     where textLength = T.pack . show . length
@@ -94,12 +127,21 @@ tracTicketToPhabricatorTicket users projects ticket =
         , m_modified = t_changetime ticket
         , m_phid = Nothing
         , m_status = t_status ticket
-        , m_changes = concatMap (tracChangeToPhabChange users projects) (t_comments ticket)
+        , m_changes = concatMap (tracChangeToPhabChange users projects) (t_changes ticket)
         , m_cc = mapMaybe lookupCC (t_cc ticket)
+        , m_projects = toProject (t_milestone ticket)
+                        ++ toProject (Just $ t_type ticket)
+                        ++ (mapMaybe lkupProj (t_keywords ticket))
         }
     where findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
           -- CC field is either an email or a username
           lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
+
+          lkupProj = lookupPhabricatorProjectPHID projects
+
+          toProject v = maybeToList (lkupProj =<< v)
+
+
 
 -- I don't have mails to check now
 lookupByEmail = const Nothing
