@@ -322,7 +322,7 @@ priorityToInteger p =
 
 updatePhabricatorTicket :: C 'Ticket -> ManiphestTicket -> IO ()
 updatePhabricatorTicket (C conn) ticket = do
-    let q = "UPDATE maniphest_task SET dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?;"
+    let q = "UPDATE maniphest_task SET id=?, dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
         q2 = "UPDATE maniphest_transaction SET dateCreated=? WHERE objectPHID=? AND transactionType='status'"
         -- A subscriber is automatically added
@@ -333,7 +333,7 @@ updatePhabricatorTicket (C conn) ticket = do
         q4 = "DELETE FROM edge WHERE src=?"
     case ticketToUpdateTuple ticket of
       Just values -> do  execute conn q values
-                         execute conn q2 [head values, values !! 3]
+                         execute conn q2 [values !! 1 , values !! 4]
         --                 execute conn q3 [MySQLText "core:subscribers", values !! 3]
         --                 execute conn q4 [values !! 3]
                          return ()
@@ -345,7 +345,8 @@ ticketToUpdateTuple :: ManiphestTicket -> Maybe [MySQLValue]
 ticketToUpdateTuple ticket =
     case m_phid ticket of
         Just (PHID t) -> Just
-            [ MySQLInt64 $ convertTime (m_created ticket)
+            [ MySQLInt64 $ fromIntegral (m_tracn ticket)
+            , MySQLInt64 $ convertTime (m_created ticket)
             , MySQLInt64 $ convertTime (m_modified ticket)
             , MySQLText $ unwrapPHID (m_authorPHID ticket)
             , MySQLText t

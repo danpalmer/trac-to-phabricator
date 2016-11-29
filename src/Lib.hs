@@ -47,7 +47,7 @@ migrate workDesc = do
 
     traceShowM ("words", length $ projectMap)
 
-
+    deleteTicketInfo pcManiphest
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
     let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
