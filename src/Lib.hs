@@ -49,13 +49,13 @@ migrate workDesc = do
     traceShowM ("tickets", length tracTickets)
     let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
     let good = t_id <$> filter (not . null . t_cc) tracTickets'
-    traceShowM good
-    traceShowM tracTickets'
+--    traceShowM good
+--    traceShowM tracTickets'
 --    traceShowM tracTickets'
     let phabricatorTickets
           = map (tracTicketToPhabricatorTicket phabricatorUsers projectMap)
               tracTickets'
-    traceShowM phabricatorTickets
+--    traceShowM phabricatorTickets
     createPhabricatorTickets pcManiphest phabricatorTickets
 
     P.close tracConn

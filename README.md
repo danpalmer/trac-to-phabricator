@@ -19,6 +19,9 @@
  - [X] Merge together the closely related "resolution" and "status"
  - [ ] Add all edge information in by mastertickets table
  - [X] Decide whether to have a special closed status as default
+ - [ ] Early tickets are closed without a resolution
+ - [ ] Skip over the "nobody" user
+ - [ ] Dates are wrong on the projects board
 
 
 Parser
