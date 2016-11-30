@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 module Trac where
 
@@ -262,12 +263,27 @@ normalise t = t { t_cc = filter (not . T.null) (t_cc t)
                 , t_keywords = filter (not . T.null) (t_keywords t)
                 , t_milestone = flatten t_milestone
                 , t_owner = flatten t_owner
-                , t_resolution = flatten t_resolution }
+                , t_resolution = flatten t_resolution
+                , t_changes = insertResolution (t_changes t) }
   where
     flatten f = case f t of
                   Just "" -> Nothing
+                  Just "nobody" -> Nothing
                   v -> v
 
+    mkFakeResolution c = c { ch_field="resolution", ch_newvalue= Just "fixed" }
+
+    -- Early tickets are closed without a resolution which breaks things
+    -- later
+    insertResolution [] = []
+    insertResolution (r@Resolution:c@Closed:xs) = r:c: insertResolution xs
+    insertResolution (c@Closed:xs) = mkFakeResolution c : c : insertResolution xs
+    insertResolution (x:xs) = x : insertResolution xs
+
+
+pattern Closed <- TracTicketChange { ch_field = "status", ch_newvalue = Just "closed" }
+
+pattern Resolution <- TracTicketChange { ch_field = "resolution"}
 
 
 

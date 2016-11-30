@@ -13,7 +13,7 @@ module Lib
     ) where
 
 import qualified Data.Text as T
-import Data.List (find)
+import Data.List (find, (\\))
 
 import Trac
 import Phabricator
@@ -27,6 +27,7 @@ import Control.Applicative
 
 import qualified Database.MySQL.Base as M
 import qualified Database.PostgreSQL.Simple as P
+
 
 data WorkDescription = Exact Int | UpTo Bool Int | All
 
@@ -192,13 +193,23 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         -- final comment and we don't both to maintain this much fidelity.
         --
     -- used by anything which gets mapped to a project
-    keywords = [maybe (Dummy "null field") (MCKeywords . convertKeywords) ch_newvalue]
+    keywords = [MCRemoveKeyword toRemove, MCAddKeyword toAdd]
+      where
+        newWords = maybe [] convertKeywords ch_newvalue
+        oldWords = maybe [] convertKeywords ch_oldvalue
+
+        toAdd = newWords \\ oldWords
+        toRemove = oldWords \\ newWords
+
+
 
     addRemoveKeywords = fromMaybe ([Dummy "null field"]) $ do
       a <- ch_oldvalue
       b <- ch_newvalue
-      return $ catMaybes [MCRemoveKeyword <$>  lookupPhabricatorProjectPHID projects a
-                         ,MCAddKeyword    <$>  lookupPhabricatorProjectPHID projects b]
+      -- Fail if the new project isn't found. This might be dodgy..
+      newProject <- lookupPhabricatorProjectPHID projects b
+      return $ catMaybes [MCRemoveKeyword . (:[]) <$>  lookupPhabricatorProjectPHID projects a]
+                          ++ [MCAddKeyword [newProject]]
 
     m con = [maybe (Dummy ("null field:")) con ch_newvalue]
 
@@ -225,6 +236,7 @@ lookupPhabricatorUserPHID users username  =
 
 lookupPhabricatorProjectPHID :: [PhabricatorProject] -> T.Text -> Maybe ProjectID
 lookupPhabricatorProjectPHID _ "" = Nothing
+lookupPhabricatorProjectPHID projects "_|_" = lookupPhabricatorProjectPHID projects "⊥"
 lookupPhabricatorProjectPHID projects project  =
   case (p_phid <$> find (\x -> p_projectName x == project) projects) of
     Just v -> Just v

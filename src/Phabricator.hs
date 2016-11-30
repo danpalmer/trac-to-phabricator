@@ -97,9 +97,8 @@ data MCType = MCComment Text
             | MCDifferential [DiffID]
             | MCDifficulty Text
             | MCFailure Text
-            | MCKeywords [ProjectID]
-            | MCAddKeyword ProjectID
-            | MCRemoveKeyword ProjectID
+            | MCAddKeyword [ProjectID]
+            | MCRemoveKeyword [ProjectID]
             | MCMilestone Text
             | MCOS Text
             | MCOwner UserID
@@ -209,7 +208,7 @@ buildTransaction = doOne
         MCDifferential d -> Nothing --Just $ mkTransaction "" -- Add edge
         MCDifficulty d   -> Just $ mkTransaction "custom.ghc:difficulty" d
         MCFailure f      -> Just $ mkTransaction "custom.ghc:failure" f
-        MCKeywords pids  -> Just $ mkTransaction "projects.set" pids
+--        MCKeywords pids  -> Just $ mkTransaction "projects.set" pids
         MCMilestone m    -> Just $ mkTransaction "custom.ghc:milestone" m
         MCOS os          -> Just $ mkTransaction "custom.ghc:os" os
         MCOwner mown     -> Just $ mkTransaction "owner" mown
@@ -226,8 +225,8 @@ buildTransaction = doOne
         MCVersion v      -> Just $ mkTransaction "custom.ghc:version" v
         MCWiki w         -> Nothing -- TO implement this field
         -- We try to remove the old one and add the new one.
-        MCAddKeyword new -> Just $ mkTransaction    "projects.add"    [new]
-        MCRemoveKeyword old -> Just $ mkTransaction "projects.remove" [old]
+        MCAddKeyword new -> Just $ mkTransaction    "projects.add"    new
+        MCRemoveKeyword old -> Just $ mkTransaction "projects.remove" old
         Dummy diag -> Nothing
 
 mkTransaction :: ToJSON a => Text -> a -> Value
