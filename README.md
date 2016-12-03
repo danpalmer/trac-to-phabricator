@@ -10,7 +10,7 @@
  - [X] Update the comment transaction
  - [ ] Worry about why sorting by creation date doesn't work properly
  - [X] Implement tags == projects and see what that looks like
- - [ ] Modify the parser to convert trac links to phab links
+ - [X] Modify the parser to convert trac links to phab links
  - [X] Fix inefficient comment/ticket pairing
  - [X] Implement other events (cc, assignment, etc)
  - [X] Copy custom field data across to Phabricator
@@ -19,8 +19,8 @@
  - [X] Merge together the closely related "resolution" and "status"
  - [ ] Add all edge information in by mastertickets table
  - [X] Decide whether to have a special closed status as default
- - [ ] Early tickets are closed without a resolution
- - [ ] Skip over the "nobody" user
+ - [X] Early tickets are closed without a resolution
+ - [X] Skip over the "nobody" user
  - [ ] Dates are wrong on the projects board
 
 

@@ -11,7 +11,7 @@ module Phabricator where
 
 import GHC.Generics (Generic)
 import Data.Int
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, fromJust)
 import Data.Either (lefts, rights)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -22,7 +22,7 @@ import Data.Time.Clock (DiffTime, diffTimeToPicoseconds)
 import Data.Text.Encoding (decodeUtf8)
 import System.IO.Streams.List (toList)
 import Database.MySQL.Base
-import Network.Conduit.Client hiding (User)
+import Network.Conduit.Client hiding (User, Repo)
 import Control.Monad
 import Trac
 import Debug.Trace
@@ -33,17 +33,21 @@ import qualified Trac.Convert as T
 import qualified Database.MySQL.Base as M
 
 data PhabricatorConnection
-  = PC { pcManiphest :: C 'Ticket , pcUser :: C 'User, pcProject :: C 'Project }
+  = PC { pcManiphest :: C 'Ticket
+       , pcUser :: C 'User
+       , pcProject :: C 'Project
+       , pcRepo :: C 'Repo }
 
 connectPhab :: IO PhabricatorConnection
 connectPhab = do
   cm <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_maniphest" }
   cu <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_user" }
   cp <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_project" }
-  return (PC cm cu cp)
+  cr <- C <$> M.connect phabConnectInfo { ciDatabase = "bitnami_phabricator_repository" }
+  return (PC cm cu cp cr)
 
 closePhab :: PhabricatorConnection -> IO ()
-closePhab (PC (C c1) (C c2) (C c3)) = M.close c1 >> M.close c2 >> M.close c3
+closePhab (PC (C c1) (C c2) (C c3) (C c4)) = M.close c1 >> M.close c2 >> M.close c3 >> M.close c4
 
 newtype C a = C { getConn :: M.MySQLConn }
 
@@ -80,6 +84,7 @@ data ManiphestTicket = ManiphestTicket
     , m_status :: Text
     , m_projects :: [ProjectID] -- Milestone, keywords, type,
     , m_changes :: [ManiphestChange]
+    , m_commits :: [CommitID]
     } deriving (Show)
 
 data ManiphestChange = ManiphestChange
@@ -139,12 +144,14 @@ mysqlToProject values =
         _ -> Nothing
 
     where
-        decodePHID p = case p of
-            MySQLBytes v -> Just . PHID $ decodeUtf8 v
-            _ -> Nothing
         decodeUserName u = case u of
             MySQLText t -> Just t
             _ -> Nothing
+
+
+decodePHID p = case p of
+  MySQLBytes v -> Just . PHID $ decodeUtf8 v
+  _ -> Nothing
 
 
 mysqlToUsers :: [[MySQLValue]] -> [PhabricatorUser]
@@ -380,6 +387,7 @@ deleteTicketInfo :: C 'Ticket -> IO ()
 deleteTicketInfo (C conn) = void $ do
   execute_ conn "DELETE FROM maniphest_task"
   execute_ conn "DELETE FROM maniphest_transaction"
+  execute_ conn "DELETE FROM maniphest_transaction_comment"
   execute_ conn "DELETE FROM edge"
 
 createProject :: Text -> IO (Maybe ProjectID)
@@ -427,3 +435,8 @@ addSubproject phid sorm name = do
 convertTime :: DiffTime -> Int64
 convertTime t = fromIntegral $ diffTimeToPicoseconds t `div` 1000000
 
+lookupCommitID :: C 'Repo -> Text -> IO CommitID
+lookupCommitID (C conn) t = do
+  [[rs]] <- toList . snd =<< query conn "SELECT phid FROM repository_commit WHERE commitIdentifier=?" [MySQLText t]
+  traceShowM rs
+  return (fromJust $ decodePHID rs)

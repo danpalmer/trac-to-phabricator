@@ -30,7 +30,7 @@ tracConnectInfo :: P.ConnectInfo
 tracConnectInfo =
   P.defaultConnectInfo { P.connectDatabase = "trac_ghc"}
 
-conduitAPIUrl = "http://192.168.1.3/api"
+conduitAPIUrl = "http://192.168.1.11/api"
 
 conduit :: Conduit
 conduit = Conduit conduitAPIUrl (authToken conduitConfig)

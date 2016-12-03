@@ -29,7 +29,7 @@ import qualified Database.MySQL.Base as M
 import qualified Database.PostgreSQL.Simple as P
 
 
-data WorkDescription = Exact Int | UpTo Bool Int | All
+data WorkDescription = Exact Int | UpTo Bool Int | All | Range Int Int
 
 migrate :: WorkDescription -> IO ()
 migrate workDesc = do
@@ -53,10 +53,10 @@ migrate workDesc = do
 --    traceShowM good
 --    traceShowM tracTickets'
 --    traceShowM tracTickets'
-    let phabricatorTickets
-          = map (tracTicketToPhabricatorTicket phabricatorUsers projectMap)
+    phabricatorTickets <-
+           mapM (tracTicketToPhabricatorTicket phabricatorUsers projectMap pcRepo)
               tracTickets'
---    traceShowM phabricatorTickets
+    --traceShowM phabricatorTickets
     createPhabricatorTickets pcManiphest phabricatorTickets
 
     P.close tracConn
@@ -101,6 +101,7 @@ getTickets :: WorkDescription -> [TracTicket] -> [TracTicket]
 getTickets (Exact n) ts = maybe [] (:[])  (find ((== n) . t_id) ts)
 getTickets (UpTo rev n) ts  = take n (if rev then reverse ts else ts)
 getTickets All ts = ts
+getTickets (Range low up) ts = filter (\t -> low <= t_id t && t_id t <= up) ts
 
 
 describeTicket :: TracTicket -> String
@@ -114,10 +115,11 @@ describeTicket ticket = T.unpack $
     where textLength = T.pack . show . length
 
 
-tracTicketToPhabricatorTicket :: [PhabricatorUser] -> [PhabricatorProject]
-                              -> TracTicket -> ManiphestTicket
-tracTicketToPhabricatorTicket users projects ticket =
-    ManiphestTicket
+tracTicketToPhabricatorTicket :: [PhabricatorUser] -> [PhabricatorProject] -> C 'Repo
+                              -> TracTicket -> IO ManiphestTicket
+tracTicketToPhabricatorTicket users projects conn ticket = do
+--    cs <- mapM (lookupCommitID conn) (t_commits ticket)
+    return $ ManiphestTicket
         { m_tracn = t_id ticket
         , m_title = t_summary ticket
         , m_description = convert <$> t_description ticket
@@ -133,6 +135,7 @@ tracTicketToPhabricatorTicket users projects ticket =
         , m_projects = toProject (t_milestone ticket)
                         ++ toProject (Just $ t_type ticket)
                         ++ (mapMaybe lkupProj (t_keywords ticket))
+        , m_commits = []
         }
     where findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
           -- CC field is either an email or a username

@@ -43,6 +43,8 @@ data TracTicket = TracTicket
     , t_keywords :: [Text]
     , t_customFields :: [TracCustomField]
     , t_changes :: [TracTicketChange]
+    , t_diffs :: [Text]
+    , t_commits :: [Text]
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -64,6 +66,8 @@ instance FromRow TracTicket where
         <*> field
         <*> field
         <*> (maybe [] parse_cc <$> (field :: RowParser (Maybe Text)))
+        <*> pure []
+        <*> pure []
         <*> pure []
         <*> pure []
 
@@ -247,7 +251,9 @@ recoverOriginalTracTicket TracTicket{..} =
     , t_description = t_description
     , t_keywords = recoverG "keywords" t_changes n t_keywords
     , t_customFields = t_customFields
-    , t_changes = t_changes }
+    , t_changes = tChanges
+    , t_diffs = t_diffs
+    , t_commits = tCommits }
   where
     recoverG :: Text -> [TracTicketChange] -> (Maybe Text -> a) -> a -> a
     recoverG field cs f def = maybe def f (ch_oldvalue <$> find ((==field) . ch_field) cs)
@@ -257,6 +263,18 @@ recoverOriginalTracTicket TracTicket{..} =
 
     n :: Maybe Text -> [Text]
     n = maybe [] parse_cc
+
+    -- Commit comments have spaces in author names
+    isCommitComment TracTicketChange { ch_field = "comment", ch_author = a }
+      =  isJust $ T.find (== ' ') a
+    isCommitComment _ = False
+
+    (tCommitsRaw, tChanges) = partition isCommitComment t_changes
+
+    tCommits = map (getCommitHash . fromJust . ch_newvalue) tCommitsRaw
+
+    start = "In [changeset:\""
+    getCommitHash = T.takeWhile (/= '/') . T.drop (T.length start)
 
 normalise :: TracTicket -> TracTicket
 normalise t = t { t_cc = filter (not . T.null) (t_cc t)
