@@ -128,7 +128,6 @@ tracTicketToPhabricatorTicket users projects conn ticket = do
         , m_priority = convertPriority $ t_priority ticket
         , m_created = t_time ticket
         , m_modified = t_changetime ticket
-        , m_phid = Nothing
         , m_status = t_status ticket
         , m_changes = concatMap (tracChangeToPhabChange users projects) (t_changes ticket)
         , m_cc = mapMaybe lookupCC (t_cc ticket)
@@ -154,7 +153,7 @@ tracChangeToPhabChange :: [PhabricatorUser] -> [PhabricatorProject]
                        -> TracTicketChange -> [ManiphestChange]
 tracChangeToPhabChange users projects TracTicketChange{..}
   = map (\t -> ManiphestChange
-                { mc_type    = trace (take 50 $ show t) t
+                { mc_type    = t
                 , mc_created = ch_time
                 , mc_authorId = findUser ch_author }) (getType ch_field)
   where

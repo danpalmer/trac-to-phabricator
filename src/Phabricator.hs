@@ -6,6 +6,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 
 module Phabricator where
 
@@ -14,6 +15,8 @@ import Data.Int
 import Data.Maybe (mapMaybe, fromJust)
 import Data.Either (lefts, rights)
 import Data.Text (Text)
+import Data.List
+import Data.Ord
 import qualified Data.Text as T
 import Data.Aeson
 import Data.Aeson.TH
@@ -28,6 +31,9 @@ import Trac
 import Debug.Trace
 import Config
 import Types
+import Data.IORef
+import qualified Data.IntMap as M
+import Data.IntMap ((!))
 
 import qualified Trac.Convert as T
 import qualified Database.MySQL.Base as M
@@ -80,7 +86,7 @@ data ManiphestTicket = ManiphestTicket
     , m_priority :: ManiphestPriority
     , m_created :: DiffTime
     , m_modified :: DiffTime
-    , m_phid :: Maybe TicketID
+--    , m_phid :: Maybe TicketID
     , m_status :: Text
     , m_projects :: [ProjectID] -- Milestone, keywords, type,
     , m_changes :: [ManiphestChange]
@@ -176,29 +182,42 @@ getPhabricatorProjects (C conn) = do
 
 
 createPhabricatorTickets :: C 'Ticket -> [ManiphestTicket] -> IO ()
-createPhabricatorTickets conn tickets =
-    mapM_ (createPhabricatorTicket conn) tickets
+createPhabricatorTickets conn tickets = do
+    tm <- newIORef (M.empty)
+    let as = concatMap (createPhabricatorTicketAction tm conn) tickets
+    doActions as
+    fixSubscribers conn
 
+doActions :: [Action] -> IO ()
+doActions as =
+    let as' = sortBy (comparing fst) as
+    in sequence_ (map snd as')
+
+
+type Action = (DiffTime, IO ())
+
+type TicketMap = IORef (M.IntMap TicketID)
 
 badTickets = [8539]
 
-createPhabricatorTicket :: C 'Ticket -> ManiphestTicket -> IO (Either Text ())
-createPhabricatorTicket conn ticket = do
+createPhabricatorTicketAction :: TicketMap -> C 'Ticket -> ManiphestTicket
+                              -> [Action]
+createPhabricatorTicketAction tm conn ticket = do
     traceShowM (T.concat [T.pack (show $ m_tracn ticket),": ", m_title ticket])
     if m_tracn ticket `elem` badTickets
-      then return (Left "BadTicket")
-      else do
-        response <- callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs ticket)
-        case response of
-            ConduitResult phidResponse -> do
-              updatePhabricatorTicket conn (ticket {m_phid = Just (api_phid phidResponse)})
-              res <- doTransactions conn (api_phid phidResponse) ticket
-              fixSubscribers conn (ticket {m_phid = Just (api_phid phidResponse)})
-            -- Make sure to do this last
-              return (Right ())
-            ConduitError code info -> do
-              traceShowM (m_title ticket, code, info)
-              return $ Left (code `T.append` info)
+      then []
+      else
+        (m_created ticket , mkTicket ticket tm >> updatePhabricatorTicket tm conn ticket)
+        : doTransactions tm conn ticket
+
+mkTicket :: ManiphestTicket -> TicketMap -> IO ()
+mkTicket t tm = do
+  APIPHID pid <- fromConduitResult <$> callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs t)
+  modifyIORef tm (M.insert (m_tracn t) pid)
+
+fromConduitResult :: ConduitResponse a -> a
+fromConduitResult (ConduitResult a) = a
+fromConduitResult (ConduitError code info) = error (show code ++ show info)
 
 buildTransaction :: ManiphestChange -> Maybe Value
 buildTransaction = doOne
@@ -251,19 +270,22 @@ ticketToConduitPairs ticket =
     , "projectPHIDs" .= m_projects ticket
     ]
 
-doTransactions :: C 'Ticket -> TicketID -> ManiphestTicket -> IO ()
-doTransactions conn tid mt = do
+doTransactions :: TicketMap -> C 'Ticket -> ManiphestTicket -> [Action]
+doTransactions tm conn mt = do
   let cs = m_changes mt
-  mapM_ (doOneTransaction conn tid) cs
+  mapMaybe (doOneTransaction tm conn mt) cs
 
 -- We have to do each one individually with 10000s of API calls to make
 -- sure we get exactly 0 or 1 transactions for each update so we can match
 -- the author and time information correctly.
-doOneTransaction :: C 'Ticket -> TicketID -> ManiphestChange -> IO ()
-doOneTransaction conn tid mc = do
+doOneTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe Action
+doOneTransaction tm conn n mc = do
+--  traceM (show $ (m_tracn n, mc_created mc, take 50 (show (mc_type mc))))
   case buildTransaction mc of
-    Nothing -> return ()
-    Just v  -> do
+    Nothing -> Nothing
+    Just v  -> Just $ (mc_created mc, do
+      traceM (show $ (m_tracn n, mc_created mc, take 50 (show mc)))
+      tid <- getTicketID n tm
       rawres <- callConduitPairs conduit "maniphest.edit"
                 [ "objectIdentifier" .= tid
                 , "transactions" .= [v] ]
@@ -282,7 +304,7 @@ doOneTransaction conn tid mc = do
         -- Zero, the edit had no effect
         []  -> return ()
         -- More than one, bad, better to abort
-        _  -> error (show ts)
+        _  -> error (show ts))
 
 {-
 isComment :: ManiphestChange -> Bool
@@ -328,49 +350,45 @@ priorityToInteger p =
         Wishlist -> 0
 
 
-updatePhabricatorTicket :: C 'Ticket -> ManiphestTicket -> IO ()
-updatePhabricatorTicket (C conn) ticket = do
+updatePhabricatorTicket :: TicketMap -> C 'Ticket -> ManiphestTicket -> IO ()
+updatePhabricatorTicket tm (C conn) ticket = do
     let q = "UPDATE maniphest_task SET id=?, dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?;"
         -- Some queries go from this separate table rather than the actual information in the ticket.
         q2 = "UPDATE maniphest_transaction SET dateCreated=?, authorPHID=? WHERE objectPHID=?"
-    case ticketToUpdateTuple ticket of
-      Just values -> do  execute conn q values
-                         execute conn q2 [values !! 1 , values !! 3, values !! 4]
-                         return ()
+    t <- getTicketID ticket tm
+    let values = ticketToUpdateTuple t ticket
+    execute conn q values
+    execute conn q2 [values !! 1 , values !! 3, values !! 4]
+    return ()
 
-      Nothing -> return ()
-
-fixSubscribers :: C 'Ticket -> ManiphestTicket -> IO ()
-fixSubscribers (C conn) ticket = do
+fixSubscribers :: C 'Ticket -> IO ()
+fixSubscribers (C conn) = do
         -- A subscriber is automatically added
         -- This is where the notification a subscriber is added is
         -- populated from. We have to be careful to just remove the bot
         -- user ID. Doing any action with the API adds you as a subscriber
         -- so you should remove the edges at the END as well.
-  let   q3 = "DELETE FROM maniphest_transaction WHERE transactionType=? AND objectPHID=? AND newValue like '%cv4luanhibq47r6o2zrb%' "
+  let   q3 = "DELETE FROM maniphest_transaction WHERE transactionType=? AND newValue like '%cv4luanhibq47r6o2zrb%' "
         -- This is where the subscribers info is populated from
         q4 = "DELETE FROM edge WHERE dst=?"
-  case ticketToUpdateTuple ticket of
-      Just values -> do  execute conn q3 [MySQLText "core:subscribers"
-                                         , values !! 4
-                                         ]
-                         execute conn q4 [MySQLText $ unwrapPHID botUser]
-                         return ()
 
-      Nothing -> return ()
+  execute conn q3 [MySQLText "core:subscribers" ]
+  execute conn q4 [MySQLText $ unwrapPHID botUser]
+  return ()
 
 
-ticketToUpdateTuple :: ManiphestTicket -> Maybe [MySQLValue]
-ticketToUpdateTuple ticket =
-    case m_phid ticket of
-        Just (PHID t) -> Just
+
+ticketToUpdateTuple :: TicketID -> ManiphestTicket ->  [MySQLValue]
+ticketToUpdateTuple (PHID t) ticket =
             [ MySQLInt64 $ fromIntegral (m_tracn ticket)
             , MySQLInt64 $ convertTime (m_created ticket)
             , MySQLInt64 $ convertTime (m_modified ticket)
             , MySQLText $ unwrapPHID (m_authorPHID ticket)
             , MySQLText t
             ]
-        Nothing -> Nothing
+
+getTicketID :: ManiphestTicket -> TicketMap -> IO TicketID
+getTicketID m tm = (! m_tracn m) <$> readIORef tm
 
 deleteProjectInfo :: C 'Project -> IO ()
 deleteProjectInfo (C conn) = void $  do
