@@ -4,6 +4,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Trac where
 
@@ -24,6 +25,7 @@ import qualified Data.Set as S
 import Debug.Trace
 import Types
 import Util
+import Network.URI.Encode
 
 connectTrac :: IO Connection
 connectTrac = connect tracConnectInfo
@@ -49,7 +51,8 @@ data TracTicket = TracTicket
     , t_customFields :: [TracCustomField]
     , t_changes :: [TracTicketChange]
     , t_diffs :: [Text]
-    , t_commits :: [Text]
+    , t_commits :: [TCommit]
+    , t_attachments :: [Attachment]
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -75,6 +78,13 @@ instance FromRow TracTicket where
         <*> pure []
         <*> pure []
         <*> pure []
+        <*> pure []
+
+data TCommit = TCommit {
+              c_id :: Text
+              , c_author :: Text
+              , c_time :: DiffTime
+              } deriving Show
 
 parseList :: Text -> [Text]
 parseList = map T.strip . T.splitOn ","
@@ -230,13 +240,15 @@ getTracTickets conn = do
     rawTickets <- query_ conn "SELECT * FROM ticket"
     customFields <- query_ conn "SELECT * FROM ticket_custom ORDER BY ticket"
     ticketUpdates <- query_ conn "SELECT * FROM ticket_change ORDER BY ticket"
+    am <- getAttachmentMap conn
     return $
-        map (normalise . recoverOriginalTracTicket) $
+        map (normalise . recoverOriginalTracTicket am) $
           mergeTracData rawTickets customFields ticketUpdates
 
+
 -- We want to recover the original state of the ticket.
-recoverOriginalTracTicket :: TracTicket -> TracTicket
-recoverOriginalTracTicket TracTicket{..} =
+recoverOriginalTracTicket :: AttachmentMap -> TracTicket -> TracTicket
+recoverOriginalTracTicket am TracTicket{..} =
   TracTicket
     { t_id = t_id
     , t_type = recover "type" t_changes t_type
@@ -258,7 +270,8 @@ recoverOriginalTracTicket TracTicket{..} =
     , t_customFields = t_customFields
     , t_changes = tChanges
     , t_diffs = t_diffs
-    , t_commits = tCommits }
+    , t_commits = tCommits
+    , t_attachments = fromMaybe [] (M.lookup t_id am) }
   where
     recoverG :: Text -> [TracTicketChange] -> (Maybe Text -> a) -> a -> a
     recoverG field cs f def = maybe def f (ch_oldvalue <$> find ((==field) . ch_field) cs)
@@ -271,15 +284,29 @@ recoverOriginalTracTicket TracTicket{..} =
 
     -- Commit comments have spaces in author names
     isCommitComment TracTicketChange { ch_field = "comment", ch_author = a }
-      =  isJust $ T.find (== ' ') a
+      =  isJust $ T.find (== '@') a
     isCommitComment _ = False
 
     (tCommitsRaw, tChanges) = partition isCommitComment t_changes
 
-    tCommits = map (getCommitHash . fromJust . ch_newvalue) tCommitsRaw
+    tCommits = map getCommit tCommitsRaw
+
+    getCommit :: TracTicketChange -> TCommit
+    getCommit TracTicketChange{..} =
+      TCommit { c_id = getCommitHash (fromJust ch_newvalue)
+             , c_author = ch_author
+             , c_time = ch_time }
 
     start = "In [changeset:\""
-    getCommitHash = T.takeWhile (/= '/') . T.drop (T.length start)
+    start1 = "commit "
+
+    getCommitHash s =
+     if start `T.isPrefixOf` s
+        then T.takeWhile (/= '/') (T.drop (T.length start) s)
+        else if start1 `T.isPrefixOf` s
+               then T.takeWhile (/= '\n') (T.drop (T.length start1) s)
+               else error (show s)
+
 
 normalise :: TracTicket -> TracTicket
 normalise t = t { t_cc = filter (not . T.null) (t_cc t)
@@ -363,7 +390,7 @@ processKeywords ts =
 
 data Attachment = Attachment {
                      a_type :: Text
-                   , a_id :: Text
+                   , a_id :: Int
                    , a_name :: Text
                    , a_size :: Int
                    , a_time :: DiffTime
@@ -372,10 +399,18 @@ data Attachment = Attachment {
                    , a_ip :: Maybe Text
                     } deriving Show
 
+attachmentToPath :: Attachment -> Text
+attachmentToPath Attachment{a_id, a_name}
+  = mkAttachmentPath a_id a_name
+
+mkAttachmentPath :: Int -> Text -> Text
+mkAttachmentPath a_id a_name
+  = T.concat ["attachments/", T.pack (show a_id),"-", a_name]
+
 instance FromRow Attachment where
   fromRow = Attachment
         <$> field -- Type
-        <*> field -- ID
+        <*> ((read @Int) . T.unpack  <$> field) -- ID
         <*> field
         <*> field
         <*> fmap tracTimeToDiffTime field
@@ -386,17 +421,24 @@ instance FromRow Attachment where
 getAttachments :: Connection -> IO [Attachment]
 getAttachments conn = query_ conn "SELECT * FROM attachment WHERE type='ticket'"
 
-tracAttachmentURL :: Text -> Text -> Text
-tracAttachmentURL n fname
-  = T.concat ["https://ghc.haskell.org/trac/ghc/raw-attachment/ticket/",n, "/", fname]
+getAttachmentMap :: Connection -> IO AttachmentMap
+getAttachmentMap conn = do
+  as <- getAttachments conn
+  return $ foldr (\a -> M.insertWith (++) (a_id a) [a]) mempty as
 
-downloadAttachments :: [Attachment] -> Text -> IO ()
-downloadAttachments as outdir =
+type AttachmentMap = IntMap [Attachment]
+
+tracAttachmentURL :: Attachment -> Text
+tracAttachmentURL Attachment{a_id, a_name}
+  = T.concat ["https://ghc.haskell.org/trac/ghc/raw-attachment/ticket/"
+             , T.pack (show a_id), "/", encodeText a_name]
+
+downloadAttachments :: [Attachment] -> IO ()
+downloadAttachments as =
   mapM_ doOne as
   where
     doOne :: Attachment -> IO ()
-    doOne Attachment{a_id, a_name} =
-			let outpath = T.concat [outdir,"/", a_id,"-", a_name]
-      in downloadFile (tracAttachmentURL a_id a_name) outpath
+    doOne a =
+      downloadFile (tracAttachmentURL a) (attachmentToPath a)
 
 

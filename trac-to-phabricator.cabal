@@ -40,6 +40,10 @@ library
                      , trac-to-remarkup
                      , containers
                      , network
+                     , base64-bytestring
+                     , mime-types
+                     , unordered-containers
+                     , uri-encode
   default-language:    Haskell2010
 
 executable trac-to-phabricator-exe

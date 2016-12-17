@@ -12,7 +12,7 @@ convert :: Text -> Text
 convert = T.pack . T.convert . T.unpack
 
 -- Used as a kind
-data PHIDType = Ticket | User | Transaction | Diff | Project | Repo | Commit
+data PHIDType = Ticket | User | Transaction | Diff | Project | Repo | Commit | File
 
 
 type TicketID = PHID 'Ticket
@@ -20,7 +20,8 @@ type TransactionID = PHID 'Transaction
 type UserID        = PHID 'User
 type DiffID        = PHID 'Diff
 type ProjectID     = PHID 'Project
-type CommitID     = PHID 'Commit
+type CommitID      = PHID 'Commit
+type FileID        = PHID 'File
 
 unwrapPHID :: PHID a -> Text
 unwrapPHID (PHID t) = t

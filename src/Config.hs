@@ -12,12 +12,11 @@ data ConduitConfig =
 
 -- The ID of the user doing the migration
 botUser :: UserID
-botUser = PHID "PHID-USER-cv4luanhibq47r6o2zrb"
+botUser = PHID "PHID-USER-5iwoi4jrklifspyshxj7"
 
 
 conduitConfig :: ConduitConfig
---conduitConfig = ConduitConfig (ConduitAPITokenAuth "api-rltdytuu6tek4yspds6wshfslw3r")
-conduitConfig = ConduitConfig (ConduitAPITokenAuth "api-obtum5xnbtckzkhg2v3xw63rdneb")
+conduitConfig = ConduitConfig (ConduitAPITokenAuth "api-hj445l5kp6rso2eoxoyvt4jwn7rh")
 
 phabConnectInfo :: M.ConnectInfo
 phabConnectInfo =
@@ -30,7 +29,7 @@ tracConnectInfo :: P.ConnectInfo
 tracConnectInfo =
   P.defaultConnectInfo { P.connectDatabase = "trac_ghc"}
 
-conduitAPIUrl = "http://192.168.1.11/api"
+conduitAPIUrl = "http://192.168.1.13/api"
 
 conduit :: Conduit
 conduit = Conduit conduitAPIUrl (authToken conduitConfig)

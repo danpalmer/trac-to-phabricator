@@ -10,14 +10,16 @@
 
 module Phabricator where
 
+import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
 import Data.Int
-import Data.Maybe (mapMaybe, fromJust)
+import Data.Maybe (mapMaybe, fromJust, fromMaybe)
 import Data.Either (lefts, rights)
 import Data.Text (Text)
 import Data.List
 import Data.Ord
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 import Data.Aeson
 import Data.Aeson.TH
 import qualified Data.Aeson.Types as J
@@ -34,9 +36,17 @@ import Types
 import Data.IORef
 import qualified Data.IntMap as M
 import Data.IntMap ((!))
+import qualified Data.HashMap.Strict as H ((!))
+import Data.Monoid
 
 import qualified Trac.Convert as T
 import qualified Database.MySQL.Base as M
+
+import qualified Data.ByteString as B (readFile, ByteString)
+import qualified Data.ByteString.Char8 as C8
+import qualified Data.ByteString.Base64 as B (encode)
+
+import Network.Mime
 
 data PhabricatorConnection
   = PC { pcManiphest :: C 'Ticket
@@ -90,14 +100,29 @@ data ManiphestTicket = ManiphestTicket
     , m_status :: Text
     , m_projects :: [ProjectID] -- Milestone, keywords, type,
     , m_changes :: [ManiphestChange]
-    , m_commits :: [CommitID]
+    , m_commits :: [ManiphestCommit]
+    , m_attachments :: [ManiphestAttachment]
     } deriving (Show)
+
+data ManiphestAttachment = ManiphestAttachment
+    { ma_tracn :: Int
+    , ma_name :: Text
+--    , ma_size :: Text
+    , ma_time :: DiffTime
+    , ma_desc :: Text
+    , ma_author :: UserID } deriving Show
 
 data ManiphestChange = ManiphestChange
   { mc_type   :: MCType
   , mc_created :: DiffTime
   , mc_authorId :: UserID
   } deriving Show
+
+data ManiphestCommit = ManiphestCommit
+                     { mc_id :: Text
+                     , mc_author :: UserID
+                     , mc_time :: DiffTime
+                     } deriving Show
 
 data MCType = MCComment Text
             | MCCC [UserID]
@@ -183,18 +208,52 @@ getPhabricatorProjects (C conn) = do
 
 createPhabricatorTickets :: C 'Ticket -> [ManiphestTicket] -> IO ()
 createPhabricatorTickets conn tickets = do
-    tm <- newIORef (M.empty)
+    tm <- newIORef M.empty
     let as = concatMap (createPhabricatorTicketAction tm conn) tickets
     doActions as
     fixSubscribers conn
 
 doActions :: [Action] -> IO ()
-doActions as =
-    let as' = sortBy (comparing fst) as
-    in sequence_ (map snd as')
+doActions as = do
+    let as' = sort as
+    print as'
+    mapM_ getAction as'
 
 
-type Action = (DiffTime, IO ())
+instance Ord Action where
+  compare (Action at t _) (Action at' t' _) = compare at at' <> compare t t'
+
+instance Eq Action where
+    a == b = a == b
+
+instance Ord ActionType where
+  compare (TicketCreate n) (TicketCreate m) = compare n m
+  compare (TicketCreate _) _ = LT
+  compare TicketUpdate TicketUpdate = EQ
+  compare TicketUpdate _ = GT
+
+instance Eq ActionType where
+    a == b = a == b
+
+data Action = Action ActionType DiffTime (IO ())
+
+instance Show Action where
+    show = printAction
+
+printAction :: Action -> String
+printAction (Action at d _) = show (at, d)
+
+getAction :: Action -> IO ()
+getAction (Action _ _ io) = io
+
+data ActionType = TicketCreate Int | TicketUpdate deriving Show
+
+mkTicketCreate :: Int -> DiffTime -> IO () -> Action
+mkTicketCreate n t ac = Action (TicketCreate n) t ac
+
+mkTicketUpdate :: DiffTime -> IO () -> Action
+mkTicketUpdate t ac = Action TicketUpdate t ac
+
 
 type TicketMap = IORef (M.IntMap TicketID)
 
@@ -207,7 +266,10 @@ createPhabricatorTicketAction tm conn ticket = do
     if m_tracn ticket `elem` badTickets
       then []
       else
-        (m_created ticket , mkTicket ticket tm >> updatePhabricatorTicket tm conn ticket)
+        mkTicketCreate
+          (m_tracn ticket)
+          (m_created ticket)
+          (mkTicket ticket tm >> updatePhabricatorTicket tm conn ticket)
         : doTransactions tm conn ticket
 
 mkTicket :: ManiphestTicket -> TicketMap -> IO ()
@@ -270,20 +332,54 @@ ticketToConduitPairs ticket =
     , "projectPHIDs" .= m_projects ticket
     ]
 
+
+-- Two transactions, upload the file and post a comment saying the
+-- attachment was added.
+attachmentTransaction :: TicketMap -> C 'Ticket
+                      -> ManiphestTicket -> ManiphestAttachment -> Action
+attachmentTransaction tm conn n a@ManiphestAttachment{..} =
+  mkTicketUpdate ma_time $ do
+    aid <- uploadAttachment a
+    let attachmentChange :: ManiphestChange
+        attachmentChange = ManiphestChange (MCComment attachmentComment)
+                                          ma_time
+                                          ma_author
+        attachmentComment = T.unwords ["Attachment", aid, "added"]
+    fromMaybe (return ()) (doOneTransaction tm conn n attachmentChange)
+
+commitTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
+                  -> ManiphestCommit -> Maybe Action
+commitTransaction tm conn n ManiphestCommit{..} =
+  mkOneAction tm conn n (ManiphestChange (MCComment commitComment)
+                                  mc_time
+                                  mc_author )
+  where
+    commitComment = T.unwords ["This ticket was mentioned in", mc_id]
+
+
+
+
 doTransactions :: TicketMap -> C 'Ticket -> ManiphestTicket -> [Action]
-doTransactions tm conn mt = do
+doTransactions tm conn mt =
   let cs = m_changes mt
-  mapMaybe (doOneTransaction tm conn mt) cs
+  in
+    map (attachmentTransaction tm conn mt) (m_attachments mt)
+     ++ mapMaybe (commitTransaction tm conn mt) (m_commits mt)
+     ++ mapMaybe (mkOneAction tm conn mt) cs
+
+mkOneAction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe Action
+mkOneAction tm conn n mc =
+  mkTicketUpdate (mc_created mc) <$>
+    doOneTransaction tm conn n mc
 
 -- We have to do each one individually with 10000s of API calls to make
 -- sure we get exactly 0 or 1 transactions for each update so we can match
 -- the author and time information correctly.
-doOneTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe Action
-doOneTransaction tm conn n mc = do
---  traceM (show $ (m_tracn n, mc_created mc, take 50 (show (mc_type mc))))
+doOneTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe (IO ())
+doOneTransaction tm conn n mc =
   case buildTransaction mc of
     Nothing -> Nothing
-    Just v  -> Just $ (mc_created mc, do
+    Just v  -> Just $ do
       traceM (show $ (m_tracn n, mc_created mc, take 50 (show mc)))
       tid <- getTicketID n tm
       rawres <- callConduitPairs conduit "maniphest.edit"
@@ -304,7 +400,7 @@ doOneTransaction tm conn n mc = do
         -- Zero, the edit had no effect
         []  -> return ()
         -- More than one, bad, better to abort
-        _  -> error (show ts))
+        _  -> error (show ts)
 
 {-
 isComment :: ManiphestChange -> Bool
@@ -312,10 +408,10 @@ isComment ManiphestChange{mc_type = "comment"} = True
 isComment _ = False
 -}
 
-transactionParser :: Object -> J.Parser [(TransactionID)]
+transactionParser :: Object -> J.Parser [TransactionID]
 transactionParser o = do
   ts <- o .: "transactions"
-  J.listParser (withObject "" ((.: "phid"))) ts
+  J.listParser (withObject "" (.: "phid")) ts
 --  parseJSON ts
 
 
@@ -419,7 +515,7 @@ createProject i@kw = do
                                                         -- don't pass this
                                                         -- param
                                                         , "members" .= ([] :: [()])]
-  traceShowM (i, (response :: ConduitResponse (APIPHID 'Project)))
+  traceShowM (i, response :: ConduitResponse (APIPHID 'Project))
   case response of
     ConduitResult (APIPHID a) -> return (Just a)
     ConduitError {} -> do
@@ -458,3 +554,54 @@ lookupCommitID (C conn) t = do
   [[rs]] <- toList . snd =<< query conn "SELECT phid FROM repository_commit WHERE commitIdentifier=?" [MySQLText t]
   traceShowM rs
   return (fromJust $ decodePHID rs)
+
+-- Attachments
+-- If a file is an image we upload it to FILE
+-- If it is a text attachment we upload it to PASTE
+--
+-- Returns the name we want to refer to it as.
+uploadAttachment :: ManiphestAttachment -> IO Text
+uploadAttachment a =
+  let mime = C8.unpack $ defaultMimeLookup (ma_name a)
+  in case mime of
+       't':'e':'x':'t':_ -> uploadPasteAttachment a
+       _ -> uploadFileAttachment a
+
+uploadPasteAttachment :: ManiphestAttachment -> IO Text
+uploadPasteAttachment a = do
+  fileData <- T.readFile filePath
+  (response :: Object) <- fromConduitResult <$>
+    callConduitPairs conduit "paste.create"
+      [ "content" .= fileData
+      , "title"   .= fileName
+      ]
+  return ((\(String s) -> s) $ response H.! "objectName")
+  where
+    filePath :: String
+    filePath = T.unpack (maniphestAttachmentToPath a)
+
+    fileName :: Text
+    fileName = ma_name a
+
+uploadFileAttachment :: ManiphestAttachment -> IO Text
+uploadFileAttachment a = do
+  fileData <- TE.decodeUtf8 . B.encode <$> B.readFile filePath
+  phid :: Text <- fromConduitResult <$>
+    callConduitPairs conduit "file.upload"
+      [ "data_base64" .= fileData
+      , "name"        .= fileName
+      ]
+  (fileInfo :: Object) <- fromConduitResult <$>
+    callConduitPairs conduit "file.info"
+      [ "phid" .= phid ]
+  return ((\(String s) -> s) $ fileInfo H.! "objectName")
+  where
+    filePath :: String
+    filePath = T.unpack (maniphestAttachmentToPath a)
+
+    fileName :: Text
+    fileName = ma_name a
+
+maniphestAttachmentToPath (ManiphestAttachment{..}) =
+  mkAttachmentPath ma_tracn ma_name
+

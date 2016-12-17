@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ViewPatterns #-}
 
 
 module Lib
@@ -123,8 +124,8 @@ tracTicketToPhabricatorTicket users projects conn ticket = do
         { m_tracn = t_id ticket
         , m_title = t_summary ticket
         , m_description = convert <$> t_description ticket
-        , m_ownerPHID = findUser <$> t_owner ticket
-        , m_authorPHID = findUser $ t_reporter ticket
+        , m_ownerPHID = findUser users <$> t_owner ticket
+        , m_authorPHID = findUser users $ t_reporter ticket
         , m_priority = convertPriority $ t_priority ticket
         , m_created = t_time ticket
         , m_modified = t_changetime ticket
@@ -134,15 +135,36 @@ tracTicketToPhabricatorTicket users projects conn ticket = do
         , m_projects = toProject (t_milestone ticket)
                         ++ toProject (Just $ t_type ticket)
                         ++ (mapMaybe lkupProj (t_keywords ticket))
-        , m_commits = []
+        , m_commits = map (convertCommit users) (t_commits ticket)
+        , m_attachments = map (convertAttachment users) (t_attachments ticket)
         }
-    where findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
+    where
           -- CC field is either an email or a username
           lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
 
           lkupProj = lookupPhabricatorProjectPHID projects
 
           toProject v = maybeToList (lkupProj =<< v)
+
+findUser :: UserMap -> T.Text -> UserID
+findUser users u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
+
+convertAttachment :: UserMap -> Attachment -> ManiphestAttachment
+convertAttachment users Attachment{..} =
+  ManiphestAttachment
+    { ma_tracn = a_id
+    , ma_name  = a_name
+--    , ma_size  = a_size
+    , ma_time  = a_time
+    , ma_desc  = a_desc
+    , ma_author = findUser users (a_author) }
+
+convertCommit :: UserMap -> TCommit -> ManiphestCommit
+convertCommit users TCommit{..} =
+  ManiphestCommit
+    { mc_id = c_id
+    , mc_author = botUser
+    , mc_time  = c_time }
 
 
 
@@ -187,7 +209,7 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         "summary"      -> m MCSummary
         "testcase"     -> [MCTestcase]
         "type"         -> addRemoveKeywords --m MCType
-        "version"      -> m MCVersion
+        "version"      -> [Dummy "VERSION"] -- m MCVersion
         "wikipage"     -> m MCWiki
         s         -> [Dummy s]
         -- Note there are lots of entries like _comment1 which correspond
@@ -205,7 +227,7 @@ tracChangeToPhabChange users projects TracTicketChange{..}
 
 
     addRemoveKeywords = fromMaybe ([Dummy "null field"]) $ do
-      a <- ch_oldvalue
+      a <- milestoneRenaming <$> ch_oldvalue
       b <- ch_newvalue
       -- Fail if the new project isn't found. This might be dodgy..
       newProject <- lookupPhabricatorProjectPHID projects (milestoneRenaming b)
@@ -237,12 +259,12 @@ lookupPhabricatorUserPHID users username  =
 
 milestoneRenaming :: T.Text -> T.Text
 milestoneRenaming "7.12.1" = "8.0.1"
+milestoneRenaming "_|_" = "⊥"
 milestoneRenaming s = s
 
 lookupPhabricatorProjectPHID :: [PhabricatorProject] -> T.Text -> Maybe ProjectID
 lookupPhabricatorProjectPHID _ "" = Nothing
-lookupPhabricatorProjectPHID projects "_|_" = lookupPhabricatorProjectPHID projects "⊥"
-lookupPhabricatorProjectPHID projects project  =
+lookupPhabricatorProjectPHID projects (milestoneRenaming -> project)  =
   case (p_phid <$> find (\x -> p_projectName x == project) projects) of
     Just v -> Just v
     Nothing -> traceShow ("Not Found", project) Nothing
