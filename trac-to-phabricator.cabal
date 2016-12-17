@@ -22,6 +22,7 @@ library
                      , Trac
                      , Config
                      , Types
+                     , Util
   build-depends:       base >= 4.7 && < 5
                      , time
                      , network-uri
@@ -38,6 +39,7 @@ library
                      , mysql-haskell
                      , trac-to-remarkup
                      , containers
+                     , network
   default-language:    Haskell2010
 
 executable trac-to-phabricator-exe

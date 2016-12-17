@@ -33,7 +33,7 @@ data WorkDescription = Exact Int | UpTo Bool Int | All | Range Int Int
 
 migrate :: WorkDescription -> IO ()
 migrate workDesc = do
-    tracConn <- P.connect tracConnectInfo
+    tracConn <- connectTrac
     pc@PC{..} <- connectPhab
 
     -- Users
@@ -205,12 +205,11 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         toRemove = oldWords \\ newWords
 
 
-
     addRemoveKeywords = fromMaybe ([Dummy "null field"]) $ do
       a <- ch_oldvalue
       b <- ch_newvalue
       -- Fail if the new project isn't found. This might be dodgy..
-      newProject <- lookupPhabricatorProjectPHID projects b
+      newProject <- lookupPhabricatorProjectPHID projects (milestoneRenaming b)
       return $ catMaybes [MCRemoveKeyword . (:[]) <$>  lookupPhabricatorProjectPHID projects a]
                           ++ [MCAddKeyword [newProject]]
 
@@ -236,6 +235,10 @@ convertPriority priority =
 lookupPhabricatorUserPHID :: [PhabricatorUser] -> T.Text -> Maybe UserID
 lookupPhabricatorUserPHID users username  =
     u_phid <$> find (\x -> u_userName x == username) users
+
+milestoneRenaming :: T.Text -> T.Text
+milestoneRenaming "7.12.1" = "8.0.1"
+milestoneRenaming s = s
 
 lookupPhabricatorProjectPHID :: [PhabricatorProject] -> T.Text -> Maybe ProjectID
 lookupPhabricatorProjectPHID _ "" = Nothing

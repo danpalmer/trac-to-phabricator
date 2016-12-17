@@ -3,6 +3,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Trac where
 
@@ -22,6 +23,10 @@ import qualified Data.IntMap as M
 import qualified Data.Set as S
 import Debug.Trace
 import Types
+import Util
+
+connectTrac :: IO Connection
+connectTrac = connect tracConnectInfo
 
 data TracTicket = TracTicket
     { t_id :: Int
@@ -353,5 +358,45 @@ processKeywords ts =
       counts = sortBy (comparing snd) (map (\v -> (v, count v all)) uni)
       final = map fst (filter (\(v, n) -> n > 10) counts)
   in traceShow counts final
+
+-- Downloading Attachments
+
+data Attachment = Attachment {
+                     a_type :: Text
+                   , a_id :: Text
+                   , a_name :: Text
+                   , a_size :: Int
+                   , a_time :: DiffTime
+                   , a_desc :: Text
+                   , a_author :: Text
+                   , a_ip :: Maybe Text
+                    } deriving Show
+
+instance FromRow Attachment where
+  fromRow = Attachment
+        <$> field -- Type
+        <*> field -- ID
+        <*> field
+        <*> field
+        <*> fmap tracTimeToDiffTime field
+        <*> field
+        <*> field
+        <*>  field
+
+getAttachments :: Connection -> IO [Attachment]
+getAttachments conn = query_ conn "SELECT * FROM attachment WHERE type='ticket'"
+
+tracAttachmentURL :: Text -> Text -> Text
+tracAttachmentURL n fname
+  = T.concat ["https://ghc.haskell.org/trac/ghc/raw-attachment/ticket/",n, "/", fname]
+
+downloadAttachments :: [Attachment] -> Text -> IO ()
+downloadAttachments as outdir =
+  mapM_ doOne as
+  where
+    doOne :: Attachment -> IO ()
+    doOne Attachment{a_id, a_name} =
+			let outpath = T.concat [outdir,"/", a_id,"-", a_name]
+      in downloadFile (tracAttachmentURL a_id a_name) outpath
 
 
