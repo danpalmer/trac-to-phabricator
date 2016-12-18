@@ -38,5 +38,10 @@
     "name": "Worksforme",
     "closed": true,
     "claim": false
+    },
+  "invalid": {
+    "name": "invalid",
+    "closed": true,
+    "claim": false
     }
 }
