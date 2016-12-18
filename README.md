@@ -14,14 +14,20 @@
  - [X] Fix inefficient comment/ticket pairing
  - [X] Implement other events (cc, assignment, etc)
  - [X] Copy custom field data across to Phabricator
- - [ ] Copy attachments across to Phabricator
+ - [X] Copy attachments across to Phabricator
  - [ ] Alert when target user does not exist
  - [X] Merge together the closely related "resolution" and "status"
  - [ ] Add all edge information in by mastertickets table
+ - [ ] Also link with differentials. I haven't been able to inspect the
+        tables to see what the right format is to inject it into the DB.
  - [X] Decide whether to have a special closed status as default
  - [X] Early tickets are closed without a resolution
  - [X] Skip over the "nobody" user
- - [ ] Dates are wrong on the projects board
+ - [ ] Dates are wrong on the projects board (Think this is to do with caching)
+ - [X] The subscribers field gets updated when people @ usernames in comments
+       but then unset if the subscribers is modified later.
+ - [ ] Turn off email sending for the transition with "setDisableEmail"
+       by modifying the used API end points.
 
 
 Parser
@@ -34,6 +40,9 @@ Parser
 Currently all configuration is hard coded, so you'll need to change those parts - see the to do list for the list of things that would need to be changed.
 
 The custom field and status definitions for Maniphest must be uploaded to Phabricator before importing. To do this, copy the contents of each file in `maniphest-config/` to the configuration of the same name in the Phabricator settings.
+
+You also need my branch of phabricator and to install the custom API
+method.
 
 # Migrating Users
 

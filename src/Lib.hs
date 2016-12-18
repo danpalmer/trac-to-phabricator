@@ -184,24 +184,27 @@ tracChangeToPhabChange users projects TracTicketChange{..}
     getType t =
       case t of
         "comment" -> [MCComment (convert $ fromMaybe "" ch_newvalue)]
-        "cc"      -> [MCCC (maybe [] (\v -> mapMaybe lookupCC (parse_cc v)) ch_newvalue)]
+        "cc"      -> ccs
         "architecture" -> addRemoveKeywords --maybe Dummy MCArchitecture ch_newvalue
         "blockedby" -> [MCBlockedBy []]
 --        "blocking"  -> MCBlocking []
         "component" -> addRemoveKeywords --m MCComponent
         "description" -> [Dummy "MCDesc"] -- [MCDescription (convert $ fromMaybe "" ch_newvalue)]
         "differential" -> [MCDifferential []]
-        "difficulty"   -> m MCDifficulty
+        "difficulty"   -> [Dummy "Difficulty"] -- m MCDifficulty
         "failure"      -> addRemoveKeywords --m MCFailure
         "keywords"     -> keywords
         "milestone"    -> addRemoveKeywords -- m MCMilestone
         "os"           -> addRemoveKeywords --m MCOS
-        "owner"        -> m (MCOwner . findUser)
+        "owner"        -> m (MCOwner . lookupPhabricatorUserPHID users)
         "patch"        -> [MCPatch]
         "priority"     -> [MCPriority (maybe Normal convertPriority ch_newvalue)]
         "related"      -> [MCRelated]
         "reporter"     -> [MCReporter]
-        "resolution"   -> m MCResolution
+        "resolution"   -> m (\s -> if T.null s then Dummy "Unset resolution"
+                                               else MCResolution s)
+                       -- When a resolution is unset, the next event is
+                       -- a ticket reopen
         "severity"     -> [MCSeverity]
         "status"       -> [case ch_newvalue of
                             Nothing -> Dummy "null field"
@@ -225,18 +228,35 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         toAdd = newWords \\ oldWords
         toRemove = oldWords \\ newWords
 
+    ccs = [MCCCRemove toRemove, MCCCAdd toAdd]
+      where
+        newWords = maybe [] convertCC ch_newvalue
+        oldWords = maybe [] convertCC ch_oldvalue
+
+        toAdd = newWords \\ oldWords
+        toRemove = oldWords \\ newWords
+
+
+
+
 
     addRemoveKeywords = fromMaybe ([Dummy "null field"]) $ do
       a <- milestoneRenaming <$> ch_oldvalue
       b <- ch_newvalue
       -- Fail if the new project isn't found. This might be dodgy..
       newProject <- lookupPhabricatorProjectPHID projects (milestoneRenaming b)
-      return $ catMaybes [MCRemoveKeyword . (:[]) <$>  lookupPhabricatorProjectPHID projects a]
-                          ++ [MCAddKeyword [newProject]]
+      let oldProject = lookupPhabricatorProjectPHID projects a
+      return $ if Just newProject == oldProject
+          then []
+          else catMaybes [MCRemoveKeyword . (:[]) <$> oldProject]
+                ++ [MCAddKeyword [newProject]]
 
     m con = [maybe (Dummy ("null field:")) con ch_newvalue]
 
     lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
+
+    convertCC :: T.Text -> [UserID]
+    convertCC t = mapMaybe lookupCC (parse_cc t)
 
     convertKeywords :: T.Text -> [ProjectID]
     convertKeywords t = mapMaybe (lookupPhabricatorProjectPHID projects) (parse_cc t)

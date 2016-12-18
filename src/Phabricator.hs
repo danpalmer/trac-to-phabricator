@@ -125,7 +125,8 @@ data ManiphestCommit = ManiphestCommit
                      } deriving Show
 
 data MCType = MCComment Text
-            | MCCC [UserID]
+            | MCCCRemove [UserID]
+            | MCCCAdd [UserID]
             | MCArchitecture Text
             | MCBlockedBy [TicketID]
             | MCComponent Text
@@ -137,7 +138,7 @@ data MCType = MCComment Text
             | MCRemoveKeyword [ProjectID]
             | MCMilestone Text
             | MCOS Text
-            | MCOwner UserID
+            | MCOwner (Maybe UserID) -- Nothing to unassign
             | MCPatch
             | MCPriority ManiphestPriority
             | MCRelated
@@ -288,7 +289,8 @@ buildTransaction = doOne
     doOne ManiphestChange{..} =
       case mc_type of
         MCComment c -> Just $ mkTransaction "comment" c
-        MCCC cs -> Just $ mkTransaction "subscribers.set" cs
+        MCCCRemove cs   -> Just $ mkTransaction "subscribers.remove" cs
+        MCCCAdd cs   -> Just $ mkTransaction "subscribers.add" cs
         MCArchitecture v -> Just $ mkTransaction "custom.ghc:architecture" v
         MCBlockedBy bs   -> Nothing --Just $ mkTransaction "parent" bs
         MCComponent c    -> Just $ mkTransaction "custom.ghc:failure" c
@@ -330,6 +332,7 @@ ticketToConduitPairs ticket =
     , "priority" .= priorityToInteger (m_priority ticket)
     , "ccPHIDs" .= m_cc ticket
     , "projectPHIDs" .= m_projects ticket
+    , "user" .= [m_authorPHID ticket]
     ]
 
 
@@ -384,7 +387,8 @@ doOneTransaction tm conn n mc =
       tid <- getTicketID n tm
       rawres <- callConduitPairs conduit "maniphest.edit"
                 [ "objectIdentifier" .= tid
-                , "transactions" .= [v] ]
+                , "transactions" .= [v]
+                , "author" .= mc_authorId mc ]
       let res = case rawres of
                   ConduitResult r -> r
                   _ -> error (show rawres)
@@ -425,12 +429,12 @@ fixTransactionInformation ::
                       -> TransactionID
                       -> IO ()
 fixTransactionInformation (C conn) (PHID maid) date (PHID tid) =
-  let fix1 = "UPDATE maniphest_transaction SET dateCreated=?, dateModified=?, authorPHID=? WHERE phid=?"
+  let fix1 = "UPDATE maniphest_transaction SET dateCreated=?, dateModified=? WHERE phid=?"
       fix2 = "UPDATE maniphest_transaction_comment SET authorPHID=? WHERE transactionPHID=?"
-      values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText maid, MySQLText tid]
+      values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText tid]
       values2 = [values1 !! 2, values1 !! 3]
   in
-    void $ execute conn fix1 values1 >> execute conn fix2 values2
+    void $ execute conn fix1 values1 -- >> execute conn fix2 values2
 
 
 
