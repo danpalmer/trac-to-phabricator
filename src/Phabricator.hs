@@ -102,6 +102,8 @@ data ManiphestTicket = ManiphestTicket
     , m_changes :: [ManiphestChange]
     , m_commits :: [ManiphestCommit]
     , m_attachments :: [ManiphestAttachment]
+    , m_diffs :: [Int]
+    , m_diffHistory :: [ManiphestChange] -- All "differential" field changes
     } deriving (Show)
 
 data ManiphestAttachment = ManiphestAttachment
@@ -131,7 +133,8 @@ data MCType = MCComment Text
             | MCBlockedBy [TicketID]
             | MCComponent Text
             | MCDescription Text
-            | MCDifferential [DiffID]
+            | MCDifferentialAdd [Int]
+            | MCDifferentialRemove [Int]
             | MCDifficulty Text
             | MCFailure Text
             | MCAddKeyword [ProjectID]
@@ -276,6 +279,15 @@ createPhabricatorTicketAction tm conn ticket = do
 mkTicket :: ManiphestTicket -> TicketMap -> IO ()
 mkTicket t tm = do
   APIPHID pid <- fromConduitResult <$> callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs t)
+
+  let
+    diffList :: String
+    diffList = show (m_diffs t)
+  (res ::  Object) <- fromConduitResult <$>
+    callConduitPairs conduit "maniphest.editdependencies"
+      [ "taskPHID" .= pid
+      , "dependsOnDiffs" .= diffList
+      , "author" .= m_authorPHID t ]
   modifyIORef tm (M.insert (m_tracn t) pid)
 
 fromConduitResult :: ConduitResponse a -> a
@@ -295,7 +307,8 @@ buildTransaction = doOne
         MCBlockedBy bs   -> Nothing --Just $ mkTransaction "parent" bs
         MCComponent c    -> Just $ mkTransaction "custom.ghc:failure" c
         MCDescription d  -> Just $ mkTransaction "description" d
-        MCDifferential d -> Nothing --Just $ mkTransaction "" -- Add edge
+        MCDifferentialRemove d -> error "DiffRemove"
+        MCDifferentialAdd d -> error "DiffAdd"
         MCDifficulty d   -> Just $ mkTransaction "custom.ghc:difficulty" d
         MCFailure f      -> Just $ mkTransaction "custom.ghc:failure" f
 --        MCKeywords pids  -> Just $ mkTransaction "projects.set" pids
@@ -351,13 +364,37 @@ attachmentTransaction tm conn n a@ManiphestAttachment{..} =
     fromMaybe (return ()) (doOneTransaction tm conn n attachmentChange)
 
 commitTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
-                  -> ManiphestCommit -> Maybe Action
+                  -> ManiphestCommit -> Action
 commitTransaction tm conn n ManiphestCommit{..} =
-  mkOneAction tm conn n (ManiphestChange (MCComment commitComment)
-                                  mc_time
-                                  mc_author )
-  where
-    commitComment = T.unwords ["This ticket was mentioned in", mc_id]
+  mkTicketUpdate mc_time $ do
+   tid <- getTicketID n tm
+   (res :: ConduitResponse Object) <-
+      callConduitPairs conduit "maniphest.editdependencies"
+        [ "taskPHID" .= tid
+        , "dependsOnCommits" .= [mc_id]
+        , "author" .= botUser
+        ]
+   traceShowM res
+   return ()
+
+differentialTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
+                        -> ManiphestChange -> Action
+differentialTransaction tm conn n ManiphestChange{..} =
+  case mc_type of
+    MCDifferentialRemove rs -> traceShow ("REMOVE", rs, m_tracn n)
+                                  (mkTicketUpdate 0 (return ()))
+    MCDifferentialAdd rs ->
+      mkTicketUpdate mc_created $ do
+        tid <- getTicketID n tm
+        (res :: ConduitResponse Object) <-
+          callConduitPairs conduit "maniphest.editdependencies"
+            [ "taskPHID" .= tid
+            , "dependsOnDiffs" .= rs
+            , "author" .= mc_authorId
+            ]
+        traceShowM res
+        return ()
+    c -> error (show ("diffTrans", c))
 
 
 
@@ -367,7 +404,8 @@ doTransactions tm conn mt =
   let cs = m_changes mt
   in
     map (attachmentTransaction tm conn mt) (m_attachments mt)
-     ++ mapMaybe (commitTransaction tm conn mt) (m_commits mt)
+     ++ map (commitTransaction tm conn mt) (m_commits mt)
+     ++ map (differentialTransaction tm conn mt) (m_diffHistory mt)
      ++ mapMaybe (mkOneAction tm conn mt) cs
 
 mkOneAction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe Action
@@ -396,15 +434,7 @@ doOneTransaction tm conn n mc =
             Left e -> error e
             Right r -> r
       traceShowM ts
-      case ts of
-        -- Uncomment to debug
-        ts -> mapM_ (fixTransactionInformation conn (mc_authorId mc) (mc_created mc)) ts
-        -- Exactly one, do the transaction update
-        [t] -> fixTransactionInformation conn (mc_authorId mc) (mc_created mc) t
-        -- Zero, the edit had no effect
-        []  -> return ()
-        -- More than one, bad, better to abort
-        _  -> error (show ts)
+      mapM_ (fixTransactionInformation conn (mc_authorId mc) (mc_created mc)) ts
 
 {-
 isComment :: ManiphestChange -> Bool
@@ -422,6 +452,7 @@ transactionParser o = do
 
 -- Need to go into two tables,  phabricator_manifest_transaction and
 -- phabricator_manifest_comment
+-- I think this is just used now to set the correct time.. yay!
 fixTransactionInformation ::
                          C 'Ticket
                       -> UserID
@@ -553,12 +584,6 @@ addSubproject phid sorm name = do
 convertTime :: DiffTime -> Int64
 convertTime t = fromIntegral $ diffTimeToPicoseconds t `div` 1000000
 
-lookupCommitID :: C 'Repo -> Text -> IO CommitID
-lookupCommitID (C conn) t = do
-  [[rs]] <- toList . snd =<< query conn "SELECT phid FROM repository_commit WHERE commitIdentifier=?" [MySQLText t]
-  traceShowM rs
-  return (fromJust $ decodePHID rs)
-
 -- Attachments
 -- If a file is an image we upload it to FILE
 -- If it is a text attachment we upload it to PASTE
@@ -608,4 +633,11 @@ uploadFileAttachment a = do
 
 maniphestAttachmentToPath (ManiphestAttachment{..}) =
   mkAttachmentPath ma_tracn ma_name
+
+-- I don't know what is meant to be in these fields
+--createFakeRevisions :: Int -> IO ()
+--createFakeRevisions n = forM_ [0..n] $ do
+--  callConduitPairs conduit "differential.creatediff"
+--    [ "title" .= "asdasdas"
+
 

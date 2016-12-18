@@ -130,15 +130,28 @@ tracTicketToPhabricatorTicket users projects conn ticket = do
         , m_created = t_time ticket
         , m_modified = t_changetime ticket
         , m_status = t_status ticket
-        , m_changes = concatMap (tracChangeToPhabChange users projects) (t_changes ticket)
+        , m_changes = otherTicketChanges
         , m_cc = mapMaybe lookupCC (t_cc ticket)
         , m_projects = toProject (t_milestone ticket)
                         ++ toProject (Just $ t_type ticket)
                         ++ (mapMaybe lkupProj (t_keywords ticket))
         , m_commits = map (convertCommit users) (t_commits ticket)
         , m_attachments = map (convertAttachment users) (t_attachments ticket)
+        , m_diffs = t_diffs ticket
+        , m_diffHistory = diffChanges
         }
     where
+          ticketChanges =
+            concatMap (tracChangeToPhabChange users projects) (t_changes ticket)
+
+          (diffChanges, otherTicketChanges)
+            = partition isDiffChange ticketChanges
+
+          isDiffChange (ManiphestChange { mc_type = t}) =
+            case t of
+              MCDifferentialAdd _ -> True
+              MCDifferentialRemove _ -> True
+              _ -> False
           -- CC field is either an email or a username
           lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
 
@@ -190,7 +203,7 @@ tracChangeToPhabChange users projects TracTicketChange{..}
 --        "blocking"  -> MCBlocking []
         "component" -> addRemoveKeywords --m MCComponent
         "description" -> [Dummy "MCDesc"] -- [MCDescription (convert $ fromMaybe "" ch_newvalue)]
-        "differential" -> [MCDifferential []]
+        "differential" -> diffs
         "difficulty"   -> [Dummy "Difficulty"] -- m MCDifficulty
         "failure"      -> addRemoveKeywords --m MCFailure
         "keywords"     -> keywords
@@ -232,6 +245,14 @@ tracChangeToPhabChange users projects TracTicketChange{..}
       where
         newWords = maybe [] convertCC ch_newvalue
         oldWords = maybe [] convertCC ch_oldvalue
+
+        toAdd = newWords \\ oldWords
+        toRemove = oldWords \\ newWords
+
+    diffs = [MCDifferentialRemove toRemove, MCDifferentialAdd toAdd]
+      where
+        newWords = parseDiff ch_newvalue
+        oldWords = parseDiff ch_oldvalue
 
         toAdd = newWords \\ oldWords
         toRemove = oldWords \\ newWords

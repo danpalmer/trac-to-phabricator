@@ -26,6 +26,8 @@ import Debug.Trace
 import Types
 import Util
 import Network.URI.Encode
+import Control.Monad
+import Data.Char
 
 connectTrac :: IO Connection
 connectTrac = connect tracConnectInfo
@@ -50,7 +52,7 @@ data TracTicket = TracTicket
     , t_keywords :: [Text]
     , t_customFields :: [TracCustomField]
     , t_changes :: [TracTicketChange]
-    , t_diffs :: [Text]
+    , t_diffs :: [Int]
     , t_commits :: [TCommit]
     , t_attachments :: [Attachment]
     } deriving (Generic, Show)
@@ -269,7 +271,10 @@ recoverOriginalTracTicket am TracTicket{..} =
     , t_keywords = recoverG "keywords" t_changes n t_keywords
     , t_customFields = t_customFields
     , t_changes = tChanges
-    , t_diffs = t_diffs
+    , t_diffs = traceShowId $  recoverG "differential" t_changes parseDiff
+                  (parseDiff $ recoverCustomFieldCurrent
+                                          "differential"
+                                          t_customFields)
     , t_commits = tCommits
     , t_attachments = fromMaybe [] (M.lookup t_id am) }
   where
@@ -281,6 +286,11 @@ recoverOriginalTracTicket am TracTicket{..} =
 
     n :: Maybe Text -> [Text]
     n = maybe [] parse_cc
+
+
+    recoverCustomFieldCurrent :: Text -> [TracCustomField] -> Maybe Text
+    recoverCustomFieldCurrent t tcs =
+      join (cf_value <$> find ((== t) . cf_name) tcs)
 
     -- Commit comments have spaces in author names
     isCommitComment TracTicketChange { ch_field = "comment", ch_author = a }
@@ -306,6 +316,17 @@ recoverOriginalTracTicket am TracTicket{..} =
         else if start1 `T.isPrefixOf` s
                then T.takeWhile (/= '\n') (T.drop (T.length start1) s)
                else error (show s)
+
+parseDiff :: Maybe Text -> [Int]
+parseDiff = maybe [] (find_diff False . T.unpack)
+  where
+    find_diff :: Bool -> String -> [Int]
+    find_diff _ [] = []
+    find_diff False ('D':s) = find_diff True s
+    find_diff False (_: s)  = find_diff False s
+    find_diff True s =
+          let (n, rest) = span isDigit s
+          in read n : find_diff False s
 
 
 normalise :: TracTicket -> TracTicket
