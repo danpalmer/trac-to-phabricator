@@ -17,13 +17,11 @@ import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.FromRow
 import Data.Maybe
 import Config
-import Data.IntMap (IntMap, (!))
+import Data.IntMap (IntMap)
 import Data.Ord
 import Data.List
 import qualified Data.IntMap as M
-import qualified Data.Set as S
 import Debug.Trace
-import Types
 import Util
 import Network.URI.Encode
 import Control.Monad
@@ -91,6 +89,7 @@ data TCommit = TCommit {
 parseList :: Text -> [Text]
 parseList = map T.strip . T.splitOn ","
 
+parse_cc :: Text -> [Text]
 parse_cc = parseList
 
 data TracCustomField = TracCustomField
@@ -293,8 +292,12 @@ recoverOriginalTracTicket am TracTicket{..} =
       join (cf_value <$> find ((== t) . cf_name) tcs)
 
     -- Commit comments have spaces in author names
-    isCommitComment TracTicketChange { ch_field = "comment", ch_author = a }
-      =  isJust $ T.find (== '@') a
+    isCommitComment TracTicketChange { ch_field = "comment", ch_author = a
+                                     , ch_newvalue = Just nv }
+      =  (isJust $ T.find (== '@') a)
+          && (start `T.isPrefixOf` nv
+          || (start1 `T.isPrefixOf` nv))
+
     isCommitComment _ = False
 
     (tCommitsRaw, tChanges) = partition isCommitComment t_changes
@@ -325,8 +328,8 @@ parseDiff = maybe [] (find_diff False . T.unpack)
     find_diff False ('D':s) = find_diff True s
     find_diff False (_: s)  = find_diff False s
     find_diff True s =
-          let (n, rest) = span isDigit s
-          in read n : find_diff False s
+          let (n, rest) = span isDigit (dropWhile (not . isDigit) s)
+          in read n : find_diff False rest
 
 
 normalise :: TracTicket -> TracTicket
@@ -352,8 +355,10 @@ normalise t = t { t_cc = filter (not . T.null) (t_cc t)
     insertResolution (x:xs) = x : insertResolution xs
 
 
+pattern Closed :: TracTicketChange
 pattern Closed <- TracTicketChange { ch_field = "status", ch_newvalue = Just "closed" }
 
+pattern Resolution :: TracTicketChange
 pattern Resolution <- TracTicketChange { ch_field = "resolution"}
 
 
@@ -386,8 +391,8 @@ getProjectWords conn = do
   component <- removeDefault "Compiler" . map fromOnly <$> query_ conn "SELECT name FROM component"
   let types = ["task", "feature request", "bug"]
   return $ Projects tags os archs milestone component types
-
-removeDefault = delete
+  where
+    removeDefault = delete
 
 -- Remove spaces and other bad characters
 normaliseToProjectName :: Text -> Text
@@ -404,7 +409,7 @@ processKeywords ts =
 
       count x = length . filter (== x)
       counts = sortBy (comparing snd) (map (\v -> (v, count v all)) uni)
-      final = map fst (filter (\(v, n) -> n > 10) counts)
+      final = map fst (filter (\(_, n) -> n > 10) counts)
   in traceShow counts final
 
 -- Downloading Attachments

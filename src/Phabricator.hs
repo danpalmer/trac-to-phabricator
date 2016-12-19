@@ -7,23 +7,22 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 module Phabricator where
 
 import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
 import Data.Int
-import Data.Maybe (mapMaybe, fromJust, fromMaybe)
-import Data.Either (lefts, rights)
+import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Text (Text)
 import Data.List
-import Data.Ord
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Data.Aeson
 import Data.Aeson.TH
 import qualified Data.Aeson.Types as J
-import Data.Time.Clock (DiffTime, diffTimeToPicoseconds)
+import Data.Time.Clock (DiffTime, diffTimeToPicoseconds, picosecondsToDiffTime)
 import Data.Text.Encoding (decodeUtf8)
 import System.IO.Streams.List (toList)
 import Database.MySQL.Base
@@ -39,11 +38,9 @@ import Data.IntMap ((!))
 import qualified Data.HashMap.Strict as H ((!))
 import Data.Monoid
 
-import qualified Trac.Convert as T
 import qualified Database.MySQL.Base as M
-
-import qualified Data.ByteString as B (readFile, ByteString)
 import qualified Data.ByteString.Char8 as C8
+import qualified Data.ByteString as B (readFile, ByteString)
 import qualified Data.ByteString.Base64 as B (encode)
 
 import Network.Mime
@@ -164,24 +161,15 @@ mysqlToUser values =
         [x,y] -> PhabricatorUser <$> decodePHID x <*> decodeUserName y
         _ -> Nothing
 
-    where
-        decodePHID p = case p of
-            MySQLBytes v -> Just . PHID $ decodeUtf8 v
-            _ -> Nothing
-        decodeUserName u = case u of
-            MySQLText t -> Just t
-            _ -> Nothing
-
 mysqlToProject :: [MySQLValue] -> Maybe PhabricatorProject
 mysqlToProject values =
     case values of
         [x,y] -> PhabricatorProject <$> decodePHID x <*> decodeUserName y
         _ -> Nothing
 
-    where
-        decodeUserName u = case u of
-            MySQLText t -> Just t
-            _ -> Nothing
+decodeUserName u = case u of
+  MySQLText t -> Just t
+  _ -> Nothing
 
 
 decodePHID p = case p of
@@ -210,57 +198,82 @@ getPhabricatorProjects (C conn) = do
 
 
 
-createPhabricatorTickets :: C 'Ticket -> [ManiphestTicket] -> IO ()
-createPhabricatorTickets conn tickets = do
-    tm <- newIORef M.empty
-    let as = concatMap (createPhabricatorTicketAction tm conn) tickets
+createPhabricatorTickets :: C 'Ticket -> WorkDescription
+                         -> [ManiphestTicket] -> IO ()
+createPhabricatorTickets conn wd tickets = do
+    tm <- ticketQuery conn
+    let as = getTickets wd
+              $ concatMap (createPhabricatorTicketAction tm conn) tickets
     doActions as
     fixSubscribers conn
+
+data WorkDescription = Exact Int | UpTo Bool Int | AllT | Range Int Int
+                     | FromTime Integer
+
+pattern DownTo n = UpTo True n
+
+
+getTickets :: WorkDescription -> [Action] -> [Action]
+getTickets (Exact n) ts = filter ((== n) . actionTicket) ts
+getTickets (UpTo rev n) ts  = take n (if rev then reverse ts else ts)
+getTickets AllT ts = ts
+getTickets (Range low up) ts =
+    filter (\t -> low <= actionTicket t && actionTicket t <= up) ts
+getTickets (FromTime n) ts =
+    let t = picosecondsToDiffTime n
+    in filter (\a -> actionTime a >= t
+                    && actionType a /= TicketCreate ) ts
 
 doActions :: [Action] -> IO ()
 doActions as = do
     let as' = sort as
-    print as'
-    mapM_ getAction as'
+    print (length as')
+    mapM_ (\(n, a) -> print n >> getAction a)(zip [0..] as')
 
 
 instance Ord Action where
-  compare (Action at t _) (Action at' t' _) = compare at at' <> compare t t'
+  compare (Action n at t _) (Action m at' t' _) =
+    compare (at, n) (at', m) <> compare t t'
 
 instance Eq Action where
-    a == b = a == b
+    a == b = compare a b == EQ
 
-instance Ord ActionType where
-  compare (TicketCreate n) (TicketCreate m) = compare n m
-  compare (TicketCreate _) _ = LT
-  compare TicketUpdate TicketUpdate = EQ
-  compare TicketUpdate _ = GT
-
-instance Eq ActionType where
-    a == b = a == b
-
-data Action = Action ActionType DiffTime (IO ())
+data Action = Action {
+            actionTicket :: Int
+            , actionType :: ActionType
+            , actionTime :: DiffTime
+            , getAction :: (IO ())}
 
 instance Show Action where
     show = printAction
 
 printAction :: Action -> String
-printAction (Action at d _) = show (at, d)
+printAction (Action at n d _) = show (n, at, d)
 
-getAction :: Action -> IO ()
-getAction (Action _ _ io) = io
-
-data ActionType = TicketCreate Int | TicketUpdate deriving Show
+data ActionType = TicketCreate | TicketUpdate deriving (Eq, Show, Ord)
 
 mkTicketCreate :: Int -> DiffTime -> IO () -> Action
-mkTicketCreate n t ac = Action (TicketCreate n) t ac
+mkTicketCreate n t ac = Action n TicketCreate t ac
 
-mkTicketUpdate :: DiffTime -> IO () -> Action
-mkTicketUpdate t ac = Action TicketUpdate t ac
+mkTicketUpdate :: Int -> DiffTime -> IO () -> Action
+mkTicketUpdate n t ac = Action n TicketUpdate t ac
+
+ticketQuery :: C 'Ticket -> IO TicketMap
+ticketQuery (C conn) = do
+  rawres <- snd <$> query_ conn "SELECT id, phid FROM maniphest_task"
+  rawList <- toList rawres
+  let res = map convert rawList
+  newIORef (M.fromList res)
+  where
+    convert :: [MySQLValue] -> (Int, TicketID)
+    convert [MySQLInt32U n, MySQLBytes v]
+      =  (fromIntegral n, PHID $ decodeUtf8 v)
+    convert e = error (show e)
 
 
 type TicketMap = IORef (M.IntMap TicketID)
 
+badTickets :: [Int]
 badTickets = [8539]
 
 createPhabricatorTicketAction :: TicketMap -> C 'Ticket -> ManiphestTicket
@@ -273,21 +286,27 @@ createPhabricatorTicketAction tm conn ticket = do
         mkTicketCreate
           (m_tracn ticket)
           (m_created ticket)
-          (mkTicket ticket tm >> updatePhabricatorTicket tm conn ticket)
+          (mkTicket conn ticket tm >> updatePhabricatorTicket tm conn ticket)
         : doTransactions tm conn ticket
 
-mkTicket :: ManiphestTicket -> TicketMap -> IO ()
-mkTicket t tm = do
+mkTicket :: C 'Ticket -> ManiphestTicket -> TicketMap -> IO ()
+mkTicket conn t tm = do
   APIPHID pid <- fromConduitResult <$> callConduitPairs conduit "maniphest.createtask" (ticketToConduitPairs t)
 
   let
-    diffList :: String
-    diffList = show (m_diffs t)
+    diffList :: [Int]
+    diffList = m_diffs t
   (res ::  Object) <- fromConduitResult <$>
     callConduitPairs conduit "maniphest.editdependencies"
       [ "taskPHID" .= pid
-      , "dependsOnDiffs" .= diffList
+      , "dependsOnDiffs" .=  diffList
       , "author" .= m_authorPHID t ]
+
+  let ts = case J.parseEither transactionParser res of
+            Left e -> error e
+            Right r -> r
+  traceShowM ts
+  mapM_ (fixTransactionInformation conn (m_created t)) ts
   modifyIORef tm (M.insert (m_tracn t) pid)
 
 fromConduitResult :: ConduitResponse a -> a
@@ -354,7 +373,7 @@ ticketToConduitPairs ticket =
 attachmentTransaction :: TicketMap -> C 'Ticket
                       -> ManiphestTicket -> ManiphestAttachment -> Action
 attachmentTransaction tm conn n a@ManiphestAttachment{..} =
-  mkTicketUpdate ma_time $ do
+  mkTicketUpdate ma_tracn ma_time $ do
     aid <- uploadAttachment a
     let attachmentChange :: ManiphestChange
         attachmentChange = ManiphestChange (MCComment attachmentComment)
@@ -366,7 +385,7 @@ attachmentTransaction tm conn n a@ManiphestAttachment{..} =
 commitTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
                   -> ManiphestCommit -> Action
 commitTransaction tm conn n ManiphestCommit{..} =
-  mkTicketUpdate mc_time $ do
+  mkTicketUpdate (m_tracn n) mc_time $ do
    tid <- getTicketID n tm
    (res :: ConduitResponse Object) <-
       callConduitPairs conduit "maniphest.editdependencies"
@@ -382,17 +401,22 @@ differentialTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
 differentialTransaction tm conn n ManiphestChange{..} =
   case mc_type of
     MCDifferentialRemove rs -> traceShow ("REMOVE", rs, m_tracn n)
-                                  (mkTicketUpdate 0 (return ()))
+                                  (mkTicketUpdate (m_tracn n) 0 (return ()))
     MCDifferentialAdd rs ->
-      mkTicketUpdate mc_created $ do
+      mkTicketUpdate (m_tracn n) mc_created $ do
         tid <- getTicketID n tm
-        (res :: ConduitResponse Object) <-
+        res <- fromConduitResult <$>
           callConduitPairs conduit "maniphest.editdependencies"
             [ "taskPHID" .= tid
             , "dependsOnDiffs" .= rs
             , "author" .= mc_authorId
             ]
-        traceShowM res
+        let ts = case J.parseEither transactionParser res of
+              Left e -> error e
+              Right r -> r
+        traceShowM ts
+        mapM_
+          (fixTransactionInformation conn mc_created) ts
         return ()
     c -> error (show ("diffTrans", c))
 
@@ -410,7 +434,7 @@ doTransactions tm conn mt =
 
 mkOneAction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe Action
 mkOneAction tm conn n mc =
-  mkTicketUpdate (mc_created mc) <$>
+  mkTicketUpdate (m_tracn n) (mc_created mc) <$>
     doOneTransaction tm conn n mc
 
 -- We have to do each one individually with 10000s of API calls to make
@@ -423,18 +447,15 @@ doOneTransaction tm conn n mc =
     Just v  -> Just $ do
       traceM (show $ (m_tracn n, mc_created mc, take 50 (show mc)))
       tid <- getTicketID n tm
-      rawres <- callConduitPairs conduit "maniphest.edit"
+      res <- fromConduitResult <$> callConduitPairs conduit "maniphest.edit"
                 [ "objectIdentifier" .= tid
                 , "transactions" .= [v]
                 , "author" .= mc_authorId mc ]
-      let res = case rawres of
-                  ConduitResult r -> r
-                  _ -> error (show rawres)
       let ts = case J.parseEither transactionParser res of
             Left e -> error e
             Right r -> r
       traceShowM ts
-      mapM_ (fixTransactionInformation conn (mc_authorId mc) (mc_created mc)) ts
+      mapM_ (fixTransactionInformation conn (mc_created mc)) ts
 
 {-
 isComment :: ManiphestChange -> Bool
@@ -455,17 +476,14 @@ transactionParser o = do
 -- I think this is just used now to set the correct time.. yay!
 fixTransactionInformation ::
                          C 'Ticket
-                      -> UserID
                       -> DiffTime
                       -> TransactionID
                       -> IO ()
-fixTransactionInformation (C conn) (PHID maid) date (PHID tid) =
+fixTransactionInformation (C conn) date (PHID tid) =
   let fix1 = "UPDATE maniphest_transaction SET dateCreated=?, dateModified=? WHERE phid=?"
-      fix2 = "UPDATE maniphest_transaction_comment SET authorPHID=? WHERE transactionPHID=?"
       values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText tid]
-      values2 = [values1 !! 2, values1 !! 3]
   in
-    void $ execute conn fix1 values1 -- >> execute conn fix2 values2
+    void $ execute conn fix1 values1
 
 
 

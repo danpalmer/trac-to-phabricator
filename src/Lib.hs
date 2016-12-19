@@ -30,7 +30,6 @@ import qualified Database.MySQL.Base as M
 import qualified Database.PostgreSQL.Simple as P
 
 
-data WorkDescription = Exact Int | UpTo Bool Int | All | Range Int Int
 
 migrate :: WorkDescription -> IO ()
 migrate workDesc = do
@@ -46,19 +45,19 @@ migrate workDesc = do
     projectMap <- getProjectMap tracConn pcProject
     traceShowM ("words", projectMap)
 
-    deleteTicketInfo pcManiphest
+    --deleteTicketInfo pcManiphest
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
-    let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
-    let good = t_id <$> filter (not . null . t_cc) tracTickets'
+--    let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
+--    let good = t_id <$> filter (not . null . t_cc) tracTickets'
 --    traceShowM good
 --    traceShowM tracTickets'
 --    traceShowM tracTickets'
-    phabricatorTickets <-
-           mapM (tracTicketToPhabricatorTicket phabricatorUsers projectMap pcRepo)
-              tracTickets'
+    let phabricatorTickets =
+           map (tracTicketToPhabricatorTicket phabricatorUsers projectMap)
+              tracTickets
     --traceShowM phabricatorTickets
-    createPhabricatorTickets pcManiphest phabricatorTickets
+    createPhabricatorTickets pcManiphest workDesc phabricatorTickets
 
     P.close tracConn
     closePhab pc
@@ -95,14 +94,6 @@ type ProjectMap = [PhabricatorProject]
 type UserMap    = [PhabricatorUser]
 
 
-pattern DownTo n = UpTo True n
-
-
-getTickets :: WorkDescription -> [TracTicket] -> [TracTicket]
-getTickets (Exact n) ts = maybe [] (:[])  (find ((== n) . t_id) ts)
-getTickets (UpTo rev n) ts  = take n (if rev then reverse ts else ts)
-getTickets All ts = ts
-getTickets (Range low up) ts = filter (\t -> low <= t_id t && t_id t <= up) ts
 
 
 describeTicket :: TracTicket -> String
@@ -116,11 +107,10 @@ describeTicket ticket = T.unpack $
     where textLength = T.pack . show . length
 
 
-tracTicketToPhabricatorTicket :: [PhabricatorUser] -> [PhabricatorProject] -> C 'Repo
-                              -> TracTicket -> IO ManiphestTicket
-tracTicketToPhabricatorTicket users projects conn ticket = do
---    cs <- mapM (lookupCommitID conn) (t_commits ticket)
-    return $ ManiphestTicket
+tracTicketToPhabricatorTicket :: [PhabricatorUser] -> [PhabricatorProject] ->
+                                 TracTicket -> ManiphestTicket
+tracTicketToPhabricatorTicket users projects ticket = do
+    ManiphestTicket
         { m_tracn = t_id ticket
         , m_title = t_summary ticket
         , m_description = convert <$> t_description ticket
@@ -173,7 +163,7 @@ convertAttachment users Attachment{..} =
     , ma_author = findUser users (a_author) }
 
 convertCommit :: UserMap -> TCommit -> ManiphestCommit
-convertCommit users TCommit{..} =
+convertCommit _ TCommit{..} =
   ManiphestCommit
     { mc_id = c_id
     , mc_author = botUser
