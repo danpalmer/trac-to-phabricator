@@ -127,8 +127,12 @@ tracTicketToPhabricatorTicket users projects ticket = do
                         ++ (mapMaybe lkupProj (t_keywords ticket))
         , m_commits = map (convertCommit users) (t_commits ticket)
         , m_attachments = map (convertAttachment users) (t_attachments ticket)
+        -- These are all changes we use editdependencies for
         , m_diffs = t_diffs ticket
         , m_diffHistory = diffChanges
+        , m_blocking = t_blocking ticket
+        , m_blockedby = t_blockedby ticket
+        , m_related = t_related ticket
         }
     where
           ticketChanges =
@@ -139,8 +143,10 @@ tracTicketToPhabricatorTicket users projects ticket = do
 
           isDiffChange (ManiphestChange { mc_type = t}) =
             case t of
-              MCDifferentialAdd _ -> True
-              MCDifferentialRemove _ -> True
+              MCDifferential {} -> True
+              MCRelated {} -> True
+              MCBlockedBy {} -> True
+              MCBlocking {} -> True
               _ -> False
           -- CC field is either an email or a username
           lookupCC t = lookupPhabricatorUserPHID users t <|> lookupByEmail t
@@ -189,8 +195,8 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         "comment" -> [MCComment (convert $ fromMaybe "" ch_newvalue)]
         "cc"      -> ccs
         "architecture" -> addRemoveKeywords --maybe Dummy MCArchitecture ch_newvalue
-        "blockedby" -> [MCBlockedBy []]
---        "blocking"  -> MCBlocking []
+        "blockedby" -> blockedby
+        "blocking"  -> blocking
         "component" -> addRemoveKeywords --m MCComponent
         "description" -> [Dummy "MCDesc"] -- [MCDescription (convert $ fromMaybe "" ch_newvalue)]
         "differential" -> diffs
@@ -202,7 +208,7 @@ tracChangeToPhabChange users projects TracTicketChange{..}
         "owner"        -> m (MCOwner . lookupPhabricatorUserPHID users)
         "patch"        -> [MCPatch]
         "priority"     -> [MCPriority (maybe Normal convertPriority ch_newvalue)]
-        "related"      -> [MCRelated]
+        "related"      -> related
         "reporter"     -> [MCReporter]
         "resolution"   -> m (\s -> if T.null s then Dummy "Unset resolution"
                                                else MCResolution s)
@@ -230,7 +236,7 @@ tracChangeToPhabChange users projects TracTicketChange{..}
 
         toAdd = newWords \\ oldWords
         toRemove = oldWords \\ newWords
-
+    -- Mentions add these edges so we can't just set
     ccs = [MCCCRemove toRemove, MCCCAdd toAdd]
       where
         newWords = maybe [] convertCC ch_newvalue
@@ -238,14 +244,22 @@ tracChangeToPhabChange users projects TracTicketChange{..}
 
         toAdd = newWords \\ oldWords
         toRemove = oldWords \\ newWords
+    -- Mentioning also adds these kinds of edges so we can't just SET
+    diffs = addRemoveField MCDifferential parseDiff
+    -- Needs to be like this because blocking also adds these kinds of
+    -- edges
+    related = addRemoveField MCRelated parseTicketName
+    blockedby = addRemoveField MCBlockedBy parseTList
+    blocking = addRemoveField MCBlocking parseTList
 
-    diffs = [MCDifferentialRemove toRemove, MCDifferentialAdd toAdd]
+    addRemoveField con parser = [con toRemove toAdd]
       where
-        newWords = parseDiff ch_newvalue
-        oldWords = parseDiff ch_oldvalue
+        newWords = parser ch_newvalue
+        oldWords = parser ch_oldvalue
 
         toAdd = newWords \\ oldWords
         toRemove = oldWords \\ newWords
+
 
 
 

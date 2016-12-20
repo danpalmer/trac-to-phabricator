@@ -50,9 +50,12 @@ data TracTicket = TracTicket
     , t_keywords :: [Text]
     , t_customFields :: [TracCustomField]
     , t_changes :: [TracTicketChange]
-    , t_diffs :: [Int]
+    , t_diffs :: [Int]   -- Initial Diffs
     , t_commits :: [TCommit]
     , t_attachments :: [Attachment]
+    , t_related :: [Int] -- Initial Related Tickets
+    , t_blockedby :: [Int]
+    , t_blocking :: [Int]
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -74,6 +77,9 @@ instance FromRow TracTicket where
         <*> field
         <*> field
         <*> (maybe [] parse_cc <$> (field :: RowParser (Maybe Text)))
+        <*> pure []
+        <*> pure []
+        <*> pure []
         <*> pure []
         <*> pure []
         <*> pure []
@@ -270,12 +276,19 @@ recoverOriginalTracTicket am TracTicket{..} =
     , t_keywords = recoverG "keywords" t_changes n t_keywords
     , t_customFields = t_customFields
     , t_changes = tChanges
-    , t_diffs = traceShowId $  recoverG "differential" t_changes parseDiff
+    , t_diffs = recoverG "differential" t_changes parseDiff
                   (parseDiff $ recoverCustomFieldCurrent
                                           "differential"
                                           t_customFields)
     , t_commits = tCommits
-    , t_attachments = fromMaybe [] (M.lookup t_id am) }
+    , t_attachments = fromMaybe [] (M.lookup t_id am)
+    , t_related = recoverG "related" t_changes parseTicketName
+                    (parseTicketName $ recoverCustomFieldCurrent
+                                        "related"
+                                        t_customFields)
+    , t_blockedby = recoverTList "blockedby"
+    , t_blocking = recoverTList "blocking"
+    }
   where
     recoverG :: Text -> [TracTicketChange] -> (Maybe Text -> a) -> a -> a
     recoverG field cs f def = maybe def f (ch_oldvalue <$> find ((==field) . ch_field) cs)
@@ -283,8 +296,14 @@ recoverOriginalTracTicket am TracTicket{..} =
     recover :: Text -> [TracTicketChange] -> Text -> Text
     recover field cs def = recoverG field cs fromJust def
 
+    recoverTList field = recoverG field t_changes parseTList
+                          (parseTList $
+                            recoverCustomFieldCurrent field t_customFields)
+
+
     n :: Maybe Text -> [Text]
     n = maybe [] parse_cc
+
 
 
     recoverCustomFieldCurrent :: Text -> [TracCustomField] -> Maybe Text
@@ -320,16 +339,31 @@ recoverOriginalTracTicket am TracTicket{..} =
                then T.takeWhile (/= '\n') (T.drop (T.length start1) s)
                else error (show s)
 
+parseTList :: Maybe Text -> [Int]
+parseTList = maybe [] (recov . T.unpack)
+      where
+        recov :: String -> [Int]
+        recov [] = []
+        recov (c:cs)
+          | isDigit c = let (ds, res) = span isDigit cs in read (c:ds)
+                                                            : recov res
+          | otherwise = recov cs
+
+parseTicketName :: Maybe Text -> [Int]
+parseTicketName =  parseLeaderGen '#'
+
 parseDiff :: Maybe Text -> [Int]
-parseDiff = maybe [] (find_diff False . T.unpack)
+parseDiff = parseLeaderGen 'D'
+
+parseLeaderGen :: Char -> Maybe Text -> [Int]
+parseLeaderGen l = maybe [] (find_gen False . T.unpack)
   where
-    find_diff :: Bool -> String -> [Int]
-    find_diff _ [] = []
-    find_diff False ('D':s) = find_diff True s
-    find_diff False (_: s)  = find_diff False s
-    find_diff True s =
+    find_gen :: Bool -> String -> [Int]
+    find_gen _ [] = []
+    find_gen False (c:s) = find_gen (c == l) s
+    find_gen True s =
           let (n, rest) = span isDigit (dropWhile (not . isDigit) s)
-          in read n : find_diff False rest
+          in read n : find_gen False rest
 
 
 normalise :: TracTicket -> TracTicket

@@ -14,7 +14,7 @@ module Phabricator where
 import qualified Data.Text.Encoding as TE
 import GHC.Generics (Generic)
 import Data.Int
-import Data.Maybe (mapMaybe, fromMaybe)
+import Data.Maybe (mapMaybe, fromMaybe, catMaybes)
 import Data.Text (Text)
 import Data.List
 import qualified Data.Text as T
@@ -35,6 +35,7 @@ import Types
 import Data.IORef
 import qualified Data.IntMap as M
 import Data.IntMap ((!))
+import qualified Data.IntMap as I (lookup)
 import qualified Data.HashMap.Strict as H ((!))
 import Data.Monoid
 
@@ -101,6 +102,9 @@ data ManiphestTicket = ManiphestTicket
     , m_attachments :: [ManiphestAttachment]
     , m_diffs :: [Int]
     , m_diffHistory :: [ManiphestChange] -- All "differential" field changes
+    , m_related :: [Int]
+    , m_blocking :: [Int]
+    , m_blockedby :: [Int]
     } deriving (Show)
 
 data ManiphestAttachment = ManiphestAttachment
@@ -127,11 +131,11 @@ data MCType = MCComment Text
             | MCCCRemove [UserID]
             | MCCCAdd [UserID]
             | MCArchitecture Text
-            | MCBlockedBy [TicketID]
+            | MCBlockedBy [Int] [Int]
+            | MCBlocking [Int] [Int]
             | MCComponent Text
             | MCDescription Text
-            | MCDifferentialAdd [Int]
-            | MCDifferentialRemove [Int]
+            | MCDifferential [Int] [Int] -- Remove Add
             | MCDifficulty Text
             | MCFailure Text
             | MCAddKeyword [ProjectID]
@@ -141,7 +145,7 @@ data MCType = MCComment Text
             | MCOwner (Maybe UserID) -- Nothing to unassign
             | MCPatch
             | MCPriority ManiphestPriority
-            | MCRelated
+            | MCRelated [Int] [Int]
             | MCReporter
             | MCResolution Text
             | MCSeverity
@@ -296,8 +300,22 @@ mkTicket conn t tm = do
   let
     diffList :: [Int]
     diffList = m_diffs t
-  editDependencies conn pid "dependsOnDiffs" ([ "add" .= [1::Int] ] :: [J.Pair])
-                   (m_authorPHID t) (m_created t)
+
+    initField f [] = return ()
+    initField f vs = traceShow (m_tracn t) $ editDependencies conn pid (traceShowId f)
+                         (object [ "add" .= traceShowId vs
+                                 , "remove" .= ([] :: [Int])  ])
+                         (m_authorPHID t) (m_created t)
+    -- With ID lookup
+    initFieldL f vs = do
+        vs' <- catMaybes <$> mapM (getTicketIDN_maybe tm) vs
+        initField f vs'
+
+  initField "dependsOnDiffs" diffList
+  initFieldL "dependsOnTasks" (m_blockedby t)
+  initFieldL "blockingTasks" (m_blocking t)
+  initFieldL "dependsOnTasks" (m_related t)
+
   modifyIORef tm (M.insert (m_tracn t) pid)
 
 editDependencies :: ToJSON v
@@ -335,11 +353,12 @@ buildTransaction = doOne
         MCCCRemove cs   -> Just $ mkTransaction "subscribers.remove" cs
         MCCCAdd cs   -> Just $ mkTransaction "subscribers.add" cs
         MCArchitecture v -> Just $ mkTransaction "custom.ghc:architecture" v
-        MCBlockedBy bs   -> Nothing --Just $ mkTransaction "parent" bs
+        MCBlockedBy {}   -> Nothing --Just $ mkTransaction "parent" bs
+        MCBlocking {}   -> Nothing --Just $ mkTransaction "parent" bs
         MCComponent c    -> Just $ mkTransaction "custom.ghc:failure" c
         MCDescription d  -> Just $ mkTransaction "description" d
-        MCDifferentialRemove d -> error "DiffRemove"
-        MCDifferentialAdd d -> error "DiffAdd"
+--        MCDifferentialRemove d -> error "DiffRemove"
+        MCDifferential {} -> error "DiffAdd"
         MCDifficulty d   -> Just $ mkTransaction "custom.ghc:difficulty" d
         MCFailure f      -> Just $ mkTransaction "custom.ghc:failure" f
 --        MCKeywords pids  -> Just $ mkTransaction "projects.set" pids
@@ -348,7 +367,7 @@ buildTransaction = doOne
         MCOwner mown     -> Just $ mkTransaction "owner" mown
         MCPatch          -> Nothing -- Junk field
         MCPriority p     -> Just $ mkTransaction "priority" (show (priorityToInteger p))
-        MCRelated        -> Nothing -- Unsure
+        MCRelated  {}    -> error "Handled elsewhere"
         MCReporter       -> Nothing -- Handled and old
         MCResolution r   -> Just $ mkTransaction "status" r -- Resolutions are actually closed statuses
         MCSeverity       -> Nothing -- Not used
@@ -405,13 +424,47 @@ differentialTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
                         -> ManiphestChange -> Action
 differentialTransaction tm conn n ManiphestChange{..} =
   case mc_type of
-    MCDifferentialRemove rs -> traceShow ("REMOVE", rs, m_tracn n)
-                                  (mkTicketUpdate (m_tracn n) 0 (return ()))
-    MCDifferentialAdd rs ->
+--    MCDifferentialRemove rs -> traceShow ("REMOVE", rs, m_tracn n)
+--                                  (mkTicketUpdate (m_tracn n) 0 (return ()))
+    MCDifferential rs adds ->
       mkTicketUpdate (m_tracn n) mc_created $ do
         tid <- getTicketID n tm
-        editDependencies conn tid "dependsOnDiffs" rs mc_authorId mc_created
+        editDependencies conn tid "dependsOnDiffs"
+          (object [ "add" .= adds
+                  , "remove" .= rs ])
+          mc_authorId mc_created
+    MCRelated rs adds ->
+      mkTicketUpdate (m_tracn n) (mc_created) $ do
+        tid <- getTicketID n tm
+        rsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) rs
+        addsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) adds
+        editDependencies conn tid "dependsOnTasks"
+            (object [ "add" .= addsid
+                    , "remove" .= rsid ])
+            mc_authorId mc_created
+    MCBlocking rs adds ->
+      mkTicketUpdate (m_tracn n) (mc_created) $ do
+        tid <- getTicketID n tm
+        rsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) rs
+        addsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) adds
+        editDependencies conn tid "blockingTasks"
+            (object [ "add" .= addsid
+                    , "remove" .= rsid ])
+            mc_authorId mc_created
+    -- Just like related
+    MCBlockedBy rs adds ->
+      mkTicketUpdate (m_tracn n) (mc_created) $ do
+        tid <- getTicketID n tm
+        rsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) rs
+        addsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) adds
+        editDependencies conn tid "dependsOnTasks"
+            (object [ "add" .= addsid
+                    , "remove" .= rsid ])
+            mc_authorId mc_created
+
     c -> error (show ("diffTrans", c))
+
+
 
 
 
@@ -532,6 +585,11 @@ ticketToUpdateTuple (PHID t) ticket =
 
 getTicketID :: ManiphestTicket -> TicketMap -> IO TicketID
 getTicketID m tm = (! m_tracn m) <$> readIORef tm
+
+getTicketIDN_maybe :: TicketMap -> Int -> IO (Maybe TicketID)
+getTicketIDN_maybe tm n = (I.lookup n) <$> readIORef tm
+
+
 
 deleteProjectInfo :: C 'Project -> IO ()
 deleteProjectInfo (C conn) = void $  do
