@@ -45,7 +45,7 @@ migrate workDesc = do
     projectMap <- getProjectMap tracConn pcProject
     traceShowM ("words", projectMap)
 
-    --deleteTicketInfo pcManiphest
+    deleteTicketInfo pcManiphest
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
 --    let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)

@@ -296,18 +296,30 @@ mkTicket conn t tm = do
   let
     diffList :: [Int]
     diffList = m_diffs t
+  editDependencies conn pid "dependsOnDiffs" ([ "add" .= [1::Int] ] :: [J.Pair])
+                   (m_authorPHID t) (m_created t)
+  modifyIORef tm (M.insert (m_tracn t) pid)
+
+editDependencies :: ToJSON v
+                 => C 'Ticket
+                 -> TicketID
+                 -> Text
+                 -> v
+                 -> UserID
+                 -> DiffTime
+                 -> IO ()
+editDependencies conn tid field v uid t = do
   (res ::  Object) <- fromConduitResult <$>
     callConduitPairs conduit "maniphest.editdependencies"
-      [ "taskPHID" .= pid
-      , "dependsOnDiffs" .=  diffList
-      , "author" .= m_authorPHID t ]
+      [ "taskPHID" .= tid
+      , field .= v
+      , "author" .= uid ]
 
-  let ts = case J.parseEither transactionParser res of
+  let ts = case J.parseEither transactionListParser res of
             Left e -> error e
             Right r -> r
   traceShowM ts
-  mapM_ (fixTransactionInformation conn (m_created t)) ts
-  modifyIORef tm (M.insert (m_tracn t) pid)
+  mapM_ (fixTransactionInformation conn t) ts
 
 fromConduitResult :: ConduitResponse a -> a
 fromConduitResult (ConduitResult a) = a
@@ -387,14 +399,7 @@ commitTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
 commitTransaction tm conn n ManiphestCommit{..} =
   mkTicketUpdate (m_tracn n) mc_time $ do
    tid <- getTicketID n tm
-   (res :: ConduitResponse Object) <-
-      callConduitPairs conduit "maniphest.editdependencies"
-        [ "taskPHID" .= tid
-        , "dependsOnCommits" .= [mc_id]
-        , "author" .= botUser
-        ]
-   traceShowM res
-   return ()
+   editDependencies conn tid "dependsOnCommits" [mc_id] botUser mc_time
 
 differentialTransaction :: TicketMap -> C 'Ticket -> ManiphestTicket
                         -> ManiphestChange -> Action
@@ -405,19 +410,7 @@ differentialTransaction tm conn n ManiphestChange{..} =
     MCDifferentialAdd rs ->
       mkTicketUpdate (m_tracn n) mc_created $ do
         tid <- getTicketID n tm
-        res <- fromConduitResult <$>
-          callConduitPairs conduit "maniphest.editdependencies"
-            [ "taskPHID" .= tid
-            , "dependsOnDiffs" .= rs
-            , "author" .= mc_authorId
-            ]
-        let ts = case J.parseEither transactionParser res of
-              Left e -> error e
-              Right r -> r
-        traceShowM ts
-        mapM_
-          (fixTransactionInformation conn mc_created) ts
-        return ()
+        editDependencies conn tid "dependsOnDiffs" rs mc_authorId mc_created
     c -> error (show ("diffTrans", c))
 
 
@@ -457,16 +450,17 @@ doOneTransaction tm conn n mc =
       traceShowM ts
       mapM_ (fixTransactionInformation conn (mc_created mc)) ts
 
-{-
-isComment :: ManiphestChange -> Bool
-isComment ManiphestChange{mc_type = "comment"} = True
-isComment _ = False
--}
 
 transactionParser :: Object -> J.Parser [TransactionID]
 transactionParser o = do
   ts <- o .: "transactions"
   J.listParser (withObject "" (.: "phid")) ts
+
+transactionListParser :: Object -> J.Parser [TransactionID]
+transactionListParser o = do
+  traceShowM o
+  ts <- o .: "transactions"
+  J.listParser parseJSON ts
 --  parseJSON ts
 
 
