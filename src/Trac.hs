@@ -314,7 +314,7 @@ recoverOriginalTracTicket am TracTicket{..} =
     isCommitComment TracTicketChange { ch_field = "comment", ch_author = a
                                      , ch_newvalue = Just nv }
       =  (isJust $ T.find (== '@') a)
-          && (start `T.isPrefixOf` nv
+          && (start2 `T.isPrefixOf` nv
           || (start1 `T.isPrefixOf` nv))
 
     isCommitComment _ = False
@@ -331,13 +331,16 @@ recoverOriginalTracTicket am TracTicket{..} =
 
     start = "In [changeset:\""
     start1 = "commit "
+    start2 = "In [changeset:" -- Note without ":"
 
     getCommitHash s =
      if start `T.isPrefixOf` s
         then T.takeWhile (/= '/') (T.drop (T.length start) s)
-        else if start1 `T.isPrefixOf` s
-               then T.takeWhile (/= '\n') (T.drop (T.length start1) s)
-               else error (show s)
+        else if start2 `T.isPrefixOf` s
+               then T.takeWhile (/= '/') (T.drop (T.length start2) s)
+               else if start1 `T.isPrefixOf` s
+                  then T.takeWhile (/= '\n') (T.drop (T.length start1) s)
+                  else error (show s)
 
 parseTList :: Maybe Text -> [Int]
 parseTList = maybe [] (recov . T.unpack)
