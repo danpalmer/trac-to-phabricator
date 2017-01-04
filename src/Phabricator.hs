@@ -237,16 +237,20 @@ doActions as = do
 
 instance Ord Action where
   compare (Action n at t _) (Action m at' t' _) =
-    compare (at, n) (at', m) <> compare t t'
+    case compare at at' of
+      LT -> LT
+      EQ -> if at == TicketCreate then compare n m
+                                  else compare t t'
+      GT -> GT
 
 instance Eq Action where
-    a == b = compare a b == EQ
+    a == b = a == b
 
 data Action = Action {
             actionTicket :: Int
             , actionType :: ActionType
             , actionTime :: DiffTime
-            , getAction :: (IO ())}
+            , getAction :: IO ()}
 
 instance Show Action where
     show = printAction
@@ -277,21 +281,16 @@ ticketQuery (C conn) = do
 
 type TicketMap = IORef (M.IntMap TicketID)
 
-badTickets :: [Int]
-badTickets = [8539]
 
 createPhabricatorTicketAction :: TicketMap -> C 'Ticket -> ManiphestTicket
                               -> [Action]
 createPhabricatorTicketAction tm conn ticket = do
     traceShowM (T.concat [T.pack (show $ m_tracn ticket),": ", m_title ticket])
-    if m_tracn ticket `elem` badTickets
-      then []
-      else
-        mkTicketCreate
-          (m_tracn ticket)
-          (m_created ticket)
-          (mkTicket conn ticket tm >> updatePhabricatorTicket tm conn ticket)
-        : doTransactions tm conn ticket
+    mkTicketCreate
+      (m_tracn ticket)
+      (m_created ticket)
+      (mkTicket conn ticket tm >> updatePhabricatorTicket tm conn ticket)
+      : doTransactions tm conn ticket
 
 mkTicket :: C 'Ticket -> ManiphestTicket -> TicketMap -> IO ()
 mkTicket conn t tm = do
@@ -434,7 +433,7 @@ differentialTransaction tm conn n ManiphestChange{..} =
                   , "remove" .= rs ])
           mc_authorId mc_created
     MCRelated rs adds ->
-      mkTicketUpdate (m_tracn n) (mc_created) $ do
+      mkTicketUpdate (m_tracn n) mc_created $ do
         tid <- getTicketID n tm
         rsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) rs
         addsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) adds
@@ -443,7 +442,7 @@ differentialTransaction tm conn n ManiphestChange{..} =
                     , "remove" .= rsid ])
             mc_authorId mc_created
     MCBlocking rs adds ->
-      mkTicketUpdate (m_tracn n) (mc_created) $ do
+      mkTicketUpdate (m_tracn n) mc_created $ do
         tid <- getTicketID n tm
         rsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) rs
         addsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) adds
@@ -453,7 +452,7 @@ differentialTransaction tm conn n ManiphestChange{..} =
             mc_authorId mc_created
     -- Just like related
     MCBlockedBy rs adds ->
-      mkTicketUpdate (m_tracn n) (mc_created) $ do
+      mkTicketUpdate (m_tracn n) mc_created $ do
         tid <- getTicketID n tm
         rsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) rs
         addsid <- catMaybes <$> mapM (getTicketIDN_maybe tm) adds
@@ -491,7 +490,7 @@ doOneTransaction tm conn n mc =
   case buildTransaction mc of
     Nothing -> Nothing
     Just v  -> Just $ do
-      traceM (show $ (m_tracn n, mc_created mc, take 50 (show mc)))
+      traceM (show (m_tracn n, mc_created mc, take 50 (show mc)))
       tid <- getTicketID n tm
       res <- fromConduitResult <$> callConduitPairs conduit "maniphest.edit"
                 [ "objectIdentifier" .= tid
@@ -587,7 +586,7 @@ getTicketID :: ManiphestTicket -> TicketMap -> IO TicketID
 getTicketID m tm = (! m_tracn m) <$> readIORef tm
 
 getTicketIDN_maybe :: TicketMap -> Int -> IO (Maybe TicketID)
-getTicketIDN_maybe tm n = (I.lookup n) <$> readIORef tm
+getTicketIDN_maybe tm n = I.lookup n <$> readIORef tm
 
 
 
@@ -608,6 +607,7 @@ deleteTicketInfo (C conn) = void $ do
   execute_ conn "DELETE FROM maniphest_transaction"
   execute_ conn "DELETE FROM maniphest_transaction_comment"
   execute_ conn "DELETE FROM edge"
+--  execute_ conn "ALTER TABLE maniphest_task AUTO_INCREMENT=20000"
 
 createProject :: Text -> IO (Maybe ProjectID)
 createProject "" = return Nothing
@@ -701,7 +701,7 @@ uploadFileAttachment a = do
     fileName :: Text
     fileName = ma_name a
 
-maniphestAttachmentToPath (ManiphestAttachment{..}) =
+maniphestAttachmentToPath ManiphestAttachment{..} =
   mkAttachmentPath ma_tracn ma_name
 
 -- I don't know what is meant to be in these fields
@@ -709,5 +709,14 @@ maniphestAttachmentToPath (ManiphestAttachment{..}) =
 --createFakeRevisions n = forM_ [0..n] $ do
 --  callConduitPairs conduit "differential.creatediff"
 --    [ "title" .= "asdasdas"
+--
+
+
+setPublicVisibility :: C 'Ticket -> C 'Project -> IO ()
+setPublicVisibility (C tconn) (C pconn) = do
+  execute_ tconn "UPDATE maniphest_task SET viewPolicy='public'"
+  execute_ pconn "UPDATE project SET viewPolicy='public'"
+  return ()
+
 
 

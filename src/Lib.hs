@@ -45,7 +45,7 @@ migrate workDesc = do
     projectMap <- getProjectMap tracConn pcProject
     traceShowM ("words", projectMap)
 
-    deleteTicketInfo pcManiphest
+    --deleteTicketInfo pcManiphest
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
 --    let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
@@ -69,8 +69,8 @@ getProjectMap tracConn pcProject = do
     --deleteProjectInfo pcProject
     -- Projects
     {-
-    Projects {..} <- getProjectWords tracConn
-
+    ps@Projects {..} <- getProjectWords tracConn
+    traceShowM ps
     createProjectHierarchy "GHC" Mil milestones
     createProjectHierarchy "Component" Sub comp
     createProjectHierarchy "OS" Sub oses
@@ -80,7 +80,6 @@ getProjectMap tracConn pcProject = do
     mapM_ createProject keywords
     mapM_ createProject types
     -}
-    --mapM_ createProject keywords
     getPhabricatorProjects pcProject
 
 
@@ -136,7 +135,8 @@ tracTicketToPhabricatorTicket users projects ticket = do
         }
     where
           ticketChanges =
-            concatMap (tracChangeToPhabChange users projects) (t_changes ticket)
+            concatMap (tracChangeToPhabChange (t_id ticket) users projects)
+                      (t_changes ticket)
 
           (diffChanges, otherTicketChanges)
             = partition isDiffChange ticketChanges
@@ -176,13 +176,18 @@ convertCommit _ TCommit{..} =
     , mc_time  = c_time }
 
 
+-- This ticket causes the parser to hang because of an insane table
+-- Need to import it and then edit the markup manually
+badTicket :: Int
+badTicket = 8539
 
 -- I don't have mails to check now
+lookupByEmail :: T.Text -> Maybe UserID
 lookupByEmail = const Nothing
 
-tracChangeToPhabChange :: [PhabricatorUser] -> [PhabricatorProject]
+tracChangeToPhabChange :: Int -> [PhabricatorUser] -> [PhabricatorProject]
                        -> TracTicketChange -> [ManiphestChange]
-tracChangeToPhabChange users projects TracTicketChange{..}
+tracChangeToPhabChange n users projects TracTicketChange{..}
   = map (\t -> ManiphestChange
                 { mc_type    = t
                 , mc_created = ch_time
@@ -192,7 +197,9 @@ tracChangeToPhabChange users projects TracTicketChange{..}
     getType :: T.Text -> [MCType]
     getType t =
       case t of
-        "comment" -> [MCComment (convert $ fromMaybe "" ch_newvalue)]
+        "comment" ->
+          [MCComment . (if n == badTicket then id else convert)
+                     $ fromMaybe "" ch_newvalue]
         "cc"      -> ccs
         "architecture" -> addRemoveKeywords --maybe Dummy MCArchitecture ch_newvalue
         "blockedby" -> blockedby

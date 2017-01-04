@@ -414,6 +414,7 @@ data Projects = Projects
               , milestones :: [Text] -- Milestones of "GHC"
               , comp :: [Text]
               , types :: [Text] } -- Projects }
+              deriving Show
 
 
 -- This is for keywords and also custom more structured fields
@@ -446,7 +447,7 @@ processKeywords ts =
 
       count x = length . filter (== x)
       counts = sortBy (comparing snd) (map (\v -> (v, count v all)) uni)
-      final = map fst (filter (\(_, n) -> n > 10) counts)
+      final = map fst (filter (\(_, n) -> n > 5) counts)
   in traceShow counts final
 
 -- Downloading Attachments
