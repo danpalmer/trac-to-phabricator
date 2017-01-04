@@ -286,10 +286,7 @@ recoverOriginalTracTicket am TracTicket{..} =
                                           t_customFields)
     , t_commits = tCommits
     , t_attachments = fromMaybe [] (M.lookup t_id am)
-    , t_related = recoverG "related" t_changes parseTicketName
-                    (parseTicketName $ recoverCustomFieldCurrent
-                                        "related"
-                                        t_customFields)
+    , t_related = recoverTList "related"
     , t_blockedby = recoverTList "blockedby"
     , t_blocking = recoverTList "blocking"
     , t_os =
