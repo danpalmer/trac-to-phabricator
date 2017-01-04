@@ -56,6 +56,8 @@ data TracTicket = TracTicket
     , t_related :: [Int] -- Initial Related Tickets
     , t_blockedby :: [Int]
     , t_blocking :: [Int]
+    , t_os :: Maybe Text
+    , t_architecture :: Maybe Text
     } deriving (Generic, Show)
 
 instance FromRow TracTicket where
@@ -85,6 +87,8 @@ instance FromRow TracTicket where
         <*> pure []
         <*> pure []
         <*> pure []
+        <*> pure Nothing
+        <*> pure Nothing
 
 data TCommit = TCommit {
               c_id :: Text
@@ -288,6 +292,12 @@ recoverOriginalTracTicket am TracTicket{..} =
                                         t_customFields)
     , t_blockedby = recoverTList "blockedby"
     , t_blocking = recoverTList "blocking"
+    , t_os =
+        recoverG "os" t_changes id
+         $ recoverCustomFieldCurrent  "os" t_customFields
+    , t_architecture =
+        recoverG "architecture" t_changes id
+         $ recoverCustomFieldCurrent  "architecture" t_customFields
     }
   where
     recoverG :: Text -> [TracTicketChange] -> (Maybe Text -> a) -> a -> a

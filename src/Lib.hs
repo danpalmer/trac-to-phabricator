@@ -56,7 +56,7 @@ migrate workDesc = do
     let phabricatorTickets =
            map (tracTicketToPhabricatorTicket phabricatorUsers projectMap)
               tracTickets
-    --traceShowM phabricatorTickets
+--    traceShowM phabricatorTickets
     createPhabricatorTickets pcManiphest workDesc phabricatorTickets
 
     P.close tracConn
@@ -123,6 +123,9 @@ tracTicketToPhabricatorTicket users projects ticket = do
         , m_cc = mapMaybe lookupCC (t_cc ticket)
         , m_projects = toProject (t_milestone ticket)
                         ++ toProject (Just $ t_type ticket)
+                        ++ toProject (Just $ t_component ticket)
+                        ++ toProject (t_os ticket)
+                        ++ toProject (t_architecture ticket)
                         ++ (mapMaybe lkupProj (t_keywords ticket))
         , m_commits = map (convertCommit users) (t_commits ticket)
         , m_attachments = map (convertAttachment users) (t_attachments ticket)

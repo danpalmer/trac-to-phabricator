@@ -315,6 +315,7 @@ mkTicket conn t tm = do
   initFieldL "blockingTasks" (m_blocking t)
   initFieldL "dependsOnTasks" (m_related t)
 
+
   modifyIORef tm (M.insert (m_tracn t) pid)
 
 editDependencies :: ToJSON v
