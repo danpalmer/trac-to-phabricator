@@ -489,6 +489,11 @@ instance FromRow Attachment where
         <*> field
         <*>  field
 
+downloadAttachmentsAll :: IO ()
+downloadAttachmentsAll = do
+  c <- connectTrac
+  getAttachments c >>= downloadAttachments
+
 getAttachments :: Connection -> IO [Attachment]
 getAttachments conn = query_ conn "SELECT * FROM attachment WHERE type='ticket'"
 

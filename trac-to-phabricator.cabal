@@ -23,6 +23,7 @@ library
                      , Config
                      , Types
                      , Util
+                     , Config
   build-depends:       base >= 4.7 && < 5
                      , time
                      , network-uri
@@ -44,6 +45,7 @@ library
                      , mime-types
                      , unordered-containers
                      , uri-encode
+                     , directory
   default-language:    Haskell2010
 
 executable trac-to-phabricator-exe

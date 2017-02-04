@@ -34,10 +34,13 @@ import Config
 import Types
 import Data.IORef
 import qualified Data.IntMap as M
+import qualified Data.Map as MM
 import Data.IntMap ((!))
 import qualified Data.IntMap as I (lookup)
 import qualified Data.HashMap.Strict as H ((!))
 import Data.Monoid
+import Data.Maybe
+import System.IO.Unsafe
 
 import qualified Database.MySQL.Base as M
 import qualified Data.ByteString.Char8 as C8
@@ -45,6 +48,24 @@ import qualified Data.ByteString as B (readFile, ByteString)
 import qualified Data.ByteString.Base64 as B (encode)
 
 import Network.Mime
+import Data.Ord
+import Data.List
+
+{-# NOINLINE commentMap #-}
+commentMap :: IORef CommentMap
+commentMap = unsafePerformIO $ newIORef (MM.empty)
+
+readCommentMap :: CommentMap
+readCommentMap = unsafePerformIO $ readIORef commentMap
+{-# NOINLINE readCommentMap #-}
+
+updateCommentMap :: (CommentMap -> CommentMap) -> IO ()
+updateCommentMap = modifyIORef' commentMap
+
+
+addCommentInfo :: (Int, Int) -> Int -> IO ()
+addCommentInfo key v = updateCommentMap (MM.insert key v)
+
 
 data PhabricatorConnection
   = PC { pcManiphest :: C 'Ticket
@@ -127,7 +148,7 @@ data ManiphestCommit = ManiphestCommit
                      , mc_time :: DiffTime
                      } deriving Show
 
-data MCType = MCComment Text
+data MCType = MCComment Int Text -- Which number comment is it?
             | MCCCRemove [UserID]
             | MCCCAdd [UserID]
             | MCArchitecture Text
@@ -206,8 +227,11 @@ createPhabricatorTickets :: C 'Ticket -> WorkDescription
                          -> [ManiphestTicket] -> IO ()
 createPhabricatorTickets conn wd tickets = do
     tm <- ticketQuery conn
-    let as = getTickets wd
-              $ concatMap (createPhabricatorTicketAction tm conn) tickets
+    let as =
+          map (appendTimeUpdate conn tm)
+            . getTickets wd
+            . concatMap (createPhabricatorTicketAction tm conn)
+            $ tickets
     doActions as
     fixSubscribers conn
 
@@ -233,6 +257,14 @@ doActions as = do
     let as' = sort as
     print (length as')
     mapM_ (\(n, a) -> print n >> getAction a)(zip [0..] as')
+
+appendTimeUpdate :: C 'Ticket -> TicketMap -> Action -> Action
+appendTimeUpdate conn tm a = a { getAction = do
+  getAction a
+  tid <- fromJust <$> getTicketIDN_maybe tm (actionTicket a)
+  setDateModified conn tid (actionTime a)
+  }
+
 
 
 instance Ord Action where
@@ -349,7 +381,7 @@ buildTransaction = doOne
     doOne :: ManiphestChange -> Maybe Value
     doOne ManiphestChange{..} =
       case mc_type of
-        MCComment c -> Just $ mkTransaction "comment" c
+        MCComment _ c -> Just $ mkTransaction "comment" c
         MCCCRemove cs   -> Just $ mkTransaction "subscribers.remove" cs
         MCCCAdd cs   -> Just $ mkTransaction "subscribers.add" cs
         MCArchitecture v -> Just $ mkTransaction "custom.ghc:architecture" v
@@ -407,7 +439,7 @@ attachmentTransaction tm conn n a@ManiphestAttachment{..} =
   mkTicketUpdate ma_tracn ma_time $ do
     aid <- uploadAttachment a
     let attachmentChange :: ManiphestChange
-        attachmentChange = ManiphestChange (MCComment attachmentComment)
+        attachmentChange = ManiphestChange (MCComment 0 attachmentComment)
                                           ma_time
                                           ma_author
         attachmentComment = T.unwords ["Attachment", aid, "added"]
@@ -467,11 +499,17 @@ differentialTransaction tm conn n ManiphestChange{..} =
 
 
 
-
+updateCommentNumber :: ManiphestChange
+                    -> (Int, [ManiphestChange])
+                    -> (Int, [ManiphestChange])
+updateCommentNumber c@(ManiphestChange { mc_type = MCComment _ p }) (i, mcs)
+  = ( i + 1, c { mc_type = (MCComment i p) } : mcs )
+updateCommentNumber c (i, mcs) = (i, c : mcs)
 
 doTransactions :: TicketMap -> C 'Ticket -> ManiphestTicket -> [Action]
 doTransactions tm conn mt =
-  let cs = m_changes mt
+  let cs = snd $ foldl' (flip updateCommentNumber (1, [])
+                  (sortBy (comparing mc_created) (m_changes mt))
   in
     map (attachmentTransaction tm conn mt) (m_attachments mt)
      ++ map (commitTransaction tm conn mt) (m_commits mt)
@@ -502,6 +540,13 @@ doOneTransaction tm conn n mc =
             Right r -> r
       traceShowM ts
       mapM_ (fixTransactionInformation conn (mc_created mc)) ts
+      case (mc_type mc, ts) of
+        (MCComment 0  _, _) -> return ()
+        (MCComment n' _, (t:_)) -> do
+          marker <- getTransactionNumber conn t
+          addCommentInfo (m_tracn n, n') marker
+        _ -> return ()
+
 
 
 transactionParser :: Object -> J.Parser [TransactionID]
@@ -516,7 +561,19 @@ transactionListParser o = do
   J.listParser parseJSON ts
 --  parseJSON ts
 
-
+getTransactionNumber :: C 'Ticket -> TransactionID -> IO Int
+getTransactionNumber (C conn) (PHID phid) = do
+  rawres <-
+    snd <$> query conn "SELECT id FROM maniphest_transaction WHERE phid=?"
+              [MySQLText phid]
+  rawList <- toList rawres
+  let [res] = map convert rawList
+  return res
+  where
+    convert :: [MySQLValue] -> Int
+    convert [MySQLInt32U n]
+      =  fromIntegral n
+    convert e = error (show e)
 
 -- Need to go into two tables,  phabricator_manifest_transaction and
 -- phabricator_manifest_comment
@@ -531,6 +588,12 @@ fixTransactionInformation (C conn) date (PHID tid) =
       values1 = [ MySQLInt64 $ convertTime date, MySQLInt64 $ convertTime date, MySQLText tid]
   in
     void $ execute conn fix1 values1
+
+setDateModified :: C 'Ticket -> TicketID -> DiffTime -> IO ()
+setDateModified (C conn) (PHID tid) date =
+  let fix = "UPDATE maniphest_task SET dateModified=? WHERE phid=?"
+      values = [ MySQLInt64 $ convertTime date, MySQLText $ tid]
+  in void $ execute conn fix values
 
 
 

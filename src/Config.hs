@@ -27,9 +27,9 @@ phabConnectInfo =
 
 tracConnectInfo :: P.ConnectInfo
 tracConnectInfo =
-  P.defaultConnectInfo { P.connectDatabase = "trac_ghc"}
+  P.defaultConnectInfo { P.connectDatabase = "trac2"}
 
-conduitAPIUrl = "http://192.168.1.14/api"
+conduitAPIUrl = "http://192.168.1.15/api"
 
 conduit :: Conduit
 conduit = Conduit conduitAPIUrl (authToken conduitConfig)

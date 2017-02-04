@@ -8,8 +8,10 @@ import qualified Trac.Convert as T
 
 import Network.Conduit.Client hiding (User, Repo)
 
-convert :: Text -> Text
-convert = T.pack . T.convert . T.unpack
+convert :: Int -> T.CommentMap -> Text -> Text
+convert n cm = T.pack . T.convert n cm . T.unpack
+
+type CommentMap = T.CommentMap
 
 -- Used as a kind
 data PHIDType = Ticket | User | Transaction | Diff | Project | Repo | Commit | File
