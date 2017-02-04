@@ -112,7 +112,8 @@ tracTicketToPhabricatorTicket users projects ticket = do
     ManiphestTicket
         { m_tracn = t_id ticket
         , m_title = t_summary ticket
-        , m_description = convert (t_id ticket) readCommentMap <$> t_description ticket
+        , m_description = convert (t_id ticket) (readCommentMap (t_id ticket))
+                            <$> t_description ticket
         , m_ownerPHID = findUser users <$> t_owner ticket
         , m_authorPHID = findUser users $ t_reporter ticket
         , m_priority = convertPriority $ t_priority ticket
@@ -194,7 +195,8 @@ tracChangeToPhabChange n users projects TracTicketChange{..}
   = map (\t -> ManiphestChange
                 { mc_type    = t
                 , mc_created = ch_time
-                , mc_authorId = findUser ch_author }) (getType ch_field)
+                , mc_authorId = findUser ch_author
+                , mc_commentn = ch_commentn }) (getType ch_field)
   where
     findUser u = fromMaybe botUser (lookupPhabricatorUserPHID users u)
     getType :: T.Text -> [MCType]
@@ -202,7 +204,7 @@ tracChangeToPhabChange n users projects TracTicketChange{..}
       case t of
         "comment" ->
           [MCComment 0 . (if n == badTicket then id
-                                            else convert n readCommentMap)
+                                            else convert n (readCommentMap n))
                      $ fromMaybe "" ch_newvalue]
         "cc"      -> ccs
         "architecture" -> addRemoveKeywords --maybe Dummy MCArchitecture ch_newvalue

@@ -124,6 +124,7 @@ data TracTicketChange = TracTicketChange
     , ch_field :: Text
     , ch_oldvalue :: Maybe Text
     , ch_newvalue :: Maybe Text
+    , ch_commentn :: Maybe Int
     } deriving Show
 
 {-
@@ -180,6 +181,7 @@ instance FromRow TracTicketChange where
         <*> field
         <*> field
         <*> field
+        <*> pure Nothing
 
 data TracTicketComment = TracTicketComment
     { co_ticket :: Int
@@ -231,10 +233,29 @@ mergeTicketsAndComments tickets changes = map merge tickets
         changes' = filter getComments changes
         bucket :: IntMap (DList TracTicketChange)
         bucket = M.fromAscListWith concatD [(ch_ticket x, singletonD x) | x <- changes']
-        merge ticket = ticket {t_changes = ticketComments ticket}
+        merge ticket = ticket {t_changes = assignCommentN $ ticketComments ticket}
         ticketComments ticket =
           sortBy (comparing ch_time)
            $ M.findWithDefault id (t_id ticket) bucket []
+
+-- Invariant, one change in each group has the N
+assignCommentN :: [TracTicketChange] -> [TracTicketChange]
+assignCommentN =  ($ []) . snd
+                     . foldl' assign (1, id)
+                     . groupBy (\t1 t2 -> ch_time t1 == ch_time t2)
+  where
+    assign :: (Int, [TracTicketChange] -> [TracTicketChange])
+           -> [TracTicketChange]
+           -> (Int, [TracTicketChange] -> [TracTicketChange])
+    assign (n, xs) g = (n + 1, xs . (++ select n g))
+
+
+    select :: Int -> [TracTicketChange] -> [TracTicketChange]
+    select n [x] = [ x { ch_commentn = Just n } ]
+    select n (x:xs)
+      | TracTicketChange { ch_field = "comment" } <- x
+      = x { ch_commentn = Just n } : xs
+      | otherwise = x : select n xs
 
 -- Going to change this into a more general method which maps a change to
 -- a maniphest update

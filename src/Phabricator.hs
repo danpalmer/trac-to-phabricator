@@ -55,9 +55,8 @@ import Data.List
 commentMap :: IORef CommentMap
 commentMap = unsafePerformIO $ newIORef (MM.empty)
 
-readCommentMap :: CommentMap
-readCommentMap = unsafePerformIO $ readIORef commentMap
-{-# NOINLINE readCommentMap #-}
+readCommentMap :: Int -> CommentMap
+readCommentMap _ = unsafePerformIO $ unsafeInterleaveIO $ readIORef commentMap
 
 updateCommentMap :: (CommentMap -> CommentMap) -> IO ()
 updateCommentMap = modifyIORef' commentMap
@@ -140,6 +139,7 @@ data ManiphestChange = ManiphestChange
   { mc_type   :: MCType
   , mc_created :: DiffTime
   , mc_authorId :: UserID
+  , mc_commentn :: Maybe Int
   } deriving Show
 
 data ManiphestCommit = ManiphestCommit
@@ -442,6 +442,7 @@ attachmentTransaction tm conn n a@ManiphestAttachment{..} =
         attachmentChange = ManiphestChange (MCComment 0 attachmentComment)
                                           ma_time
                                           ma_author
+                                          Nothing
         attachmentComment = T.unwords ["Attachment", aid, "added"]
     fromMaybe (return ()) (doOneTransaction tm conn n attachmentChange)
 
@@ -508,7 +509,7 @@ updateCommentNumber c (i, mcs) = (i, c : mcs)
 
 doTransactions :: TicketMap -> C 'Ticket -> ManiphestTicket -> [Action]
 doTransactions tm conn mt =
-  let cs = snd $ foldl' (flip updateCommentNumber (1, [])
+  let cs = snd $ foldl' (flip updateCommentNumber) (1, [])
                   (sortBy (comparing mc_created) (m_changes mt))
   in
     map (attachmentTransaction tm conn mt) (m_attachments mt)
@@ -540,10 +541,10 @@ doOneTransaction tm conn n mc =
             Right r -> r
       traceShowM ts
       mapM_ (fixTransactionInformation conn (mc_created mc)) ts
-      case (mc_type mc, ts) of
-        (MCComment 0  _, _) -> return ()
-        (MCComment n' _, (t:_)) -> do
+      case (mc_commentn mc, ts) of
+        (Just n', (t:_)) -> do
           marker <- getTransactionNumber conn t
+          traceShowM ("Adding INFO", n', marker)
           addCommentInfo (m_tracn n, n') marker
         _ -> return ()
 
