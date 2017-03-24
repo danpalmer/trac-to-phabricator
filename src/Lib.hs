@@ -45,7 +45,7 @@ migrate workDesc = do
     projectMap <- getProjectMap tracConn pcProject
     traceShowM ("words", projectMap)
 
-    deleteTicketInfo pcManiphest
+--    deleteTicketInfo pcManiphest
     tracTickets <- getTracTickets tracConn
     traceShowM ("tickets", length tracTickets)
 --    let tracTickets' = getTickets workDesc (sortBy (comparing t_id) tracTickets)
@@ -203,7 +203,7 @@ tracChangeToPhabChange n users projects TracTicketChange{..}
     getType t =
       case t of
         "comment" ->
-          [MCComment 0 . (if n == badTicket then id
+          [MCComment . (if n == badTicket then id
                                             else convert n (readCommentMap n))
                      $ fromMaybe "" ch_newvalue]
         "cc"      -> ccs

@@ -148,7 +148,7 @@ data ManiphestCommit = ManiphestCommit
                      , mc_time :: DiffTime
                      } deriving Show
 
-data MCType = MCComment Int Text -- Which number comment is it?
+data MCType = MCComment Text
             | MCCCRemove [UserID]
             | MCCCAdd [UserID]
             | MCArchitecture Text
@@ -381,7 +381,7 @@ buildTransaction = doOne
     doOne :: ManiphestChange -> Maybe Value
     doOne ManiphestChange{..} =
       case mc_type of
-        MCComment _ c -> Just $ mkTransaction "comment" c
+        MCComment c -> Just $ mkTransaction "comment" c
         MCCCRemove cs   -> Just $ mkTransaction "subscribers.remove" cs
         MCCCAdd cs   -> Just $ mkTransaction "subscribers.add" cs
         MCArchitecture v -> Just $ mkTransaction "custom.ghc:architecture" v
@@ -439,7 +439,7 @@ attachmentTransaction tm conn n a@ManiphestAttachment{..} =
   mkTicketUpdate ma_tracn ma_time $ do
     aid <- uploadAttachment a
     let attachmentChange :: ManiphestChange
-        attachmentChange = ManiphestChange (MCComment 0 attachmentComment)
+        attachmentChange = ManiphestChange (MCComment attachmentComment)
                                           ma_time
                                           ma_author
                                           Nothing
@@ -500,22 +500,12 @@ differentialTransaction tm conn n ManiphestChange{..} =
 
 
 
-updateCommentNumber :: ManiphestChange
-                    -> (Int, [ManiphestChange])
-                    -> (Int, [ManiphestChange])
-updateCommentNumber c@(ManiphestChange { mc_type = MCComment _ p }) (i, mcs)
-  = ( i + 1, c { mc_type = (MCComment i p) } : mcs )
-updateCommentNumber c (i, mcs) = (i, c : mcs)
-
 doTransactions :: TicketMap -> C 'Ticket -> ManiphestTicket -> [Action]
 doTransactions tm conn mt =
-  let cs = snd $ foldl' (flip updateCommentNumber) (1, [])
-                  (sortBy (comparing mc_created) (m_changes mt))
-  in
     map (attachmentTransaction tm conn mt) (m_attachments mt)
      ++ map (commitTransaction tm conn mt) (m_commits mt)
      ++ map (differentialTransaction tm conn mt) (m_diffHistory mt)
-     ++ mapMaybe (mkOneAction tm conn mt) cs
+     ++ mapMaybe (mkOneAction tm conn mt) (m_changes mt)
 
 mkOneAction :: TicketMap -> C 'Ticket -> ManiphestTicket -> ManiphestChange -> Maybe Action
 mkOneAction tm conn n mc =
@@ -672,7 +662,7 @@ deleteTicketInfo (C conn) = void $ do
   execute_ conn "DELETE FROM maniphest_transaction"
   execute_ conn "DELETE FROM maniphest_transaction_comment"
   execute_ conn "DELETE FROM edge"
---  execute_ conn "ALTER TABLE maniphest_task AUTO_INCREMENT=20000"
+  execute_ conn "ALTER TABLE maniphest_task AUTO_INCREMENT=20000"
 
 createProject :: Text -> IO (Maybe ProjectID)
 createProject "" = return Nothing
